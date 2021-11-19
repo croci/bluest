@@ -1,59 +1,84 @@
-import cvxpy as cp
 import numpy as np
-import scipy.sparse as sp
+from numba import njit
 from itertools import combinations
-from time import time
+import sys
 
-N = 100
-K = 3
+N = 6
+K = 2
 
 C = np.random.randn(N,N); C = C.T@C
 
-def construct_matrix_map(groups):
-    idx = np.concatenate(groups)
-    l = len(idx)
-    return sp.csc_matrix((np.ones((l,),dtype=np.int16), (np.arange(l), idx)),dtype=np.int16)
-
-groups = []
-maps = []
-invcovs = []
+groups,indices,invcovs,invcovs_sq = [[[] for k in range(K)] for i in range(4)]
+sizes = [0]
 for k in range(1, K+1):
-    group = [comb for comb in combinations(range(N), k)] 
-    M = construct_matrix_map(group)
+    for comb in combinations(range(N), k):
+        groups[k-1].append(comb)
+        idx = np.array([comb])
+        indices[k-1].append((idx.T, idx))
+        invcovs[k-1].append(np.linalg.inv(C[indices[k-1][-1]]))
+        invcovs_sq[k-1].append(invcovs[k-1][-1])
 
-    iCs = np.hstack([np.linalg.inv(C[(np.array([item]).T, np.array([item]))]) for item in group]) 
+    sizes += [len(groups[k-1])]
+    groups[k-1] = np.array(groups[k-1])
+    invcovs[k-1] = np.vstack(invcovs[k-1]).flatten()
 
-    groups.append(group)
-    maps.append(M)
-    invcovs.append(iCs)
-
-#indices = [(np.array([item]).T, np.array([item])) for item in groups]
-#covs = [C[idx] for idx in indices]
-#invcovs = [np.linalg.inv(cov) for cov in covs]
-#M = construct_matrix_map(groups)
-#L = len(groups)
 
 delta = 0.0
-sizes = [0] + [item.shape[1] for item in invcovs]
 cumsizes = np.cumsum(sizes)
 L = cumsizes[-1]
-m_idx = np.vstack([cumsizes[:-1],cumsizes[1:]]).T
 
 m0 = 1 + np.random.randint(100, size=L)
 
 def objective(m=m0):
-    PHI = np.zeros((N,N))
+    PHI = delta*np.eye(N).flatten()
+    m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
     for k in range(1, K+1):
-        fac = np.repeat(m[m_idx[k-1,0]:m_idx[k-1,1]],k)*invcovs[k-1]) #NOTE: this is correct
-        #FIXME
-        PHI += maps[k-1].T@(np.repeat(m[m_idx[k-1,0]:m_idx[k-1,1]],k)*invcovs[k-1])@maps[k-1]
+        PHI += objectiveK(k,sizes[k],m[k-1],groups[k-1],invcovs[k-1])
 
-    #for i in range(L):
-    #    PHI[indices[i]] += m[i]*invcovs[i]
+    PHI = PHI.reshape((N,N))
 
-    PHI[np.diag_indices(N)] += delta
+    out = np.linalg.solve(PHI,np.eye(N,1).flatten())[0]
+
+    return out
+
+
+@njit
+def objectiveK(k,Lk,mk,groupsk,invcovsk):
+    PHI = np.zeros((N*N,))
+    for i in range(Lk):
+        group = groupsk[i]
+        for j in range(k):
+            for l in range(k):
+                PHI[N*group[j]+group[l]] += mk[i]*invcovsk[k*k*i + k*j + l]
+
+    return PHI
+
+out1 = objective(m0)
+
+def objective_slow(m=m0):
+    PHI = delta*np.eye(N)
+    m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
+    for k in range(1, K+1):
+        for i in range(sizes[k]):
+            PHI[indices[k-1][i]] += m[k-1][i]*invcovs_sq[k-1][i]
 
     out = np.linalg.solve(PHI,np.eye(N,1).flatten())[0]
     return out
 
-objective(m0)
+out2 = objective_slow(m0)
+
+assert abs(out1-out2) <= 1.0e-10
+
+########################################################
+
+from scipy.optimize import minimize,LinearConstraint, Bounds
+
+print("Optimizing...")
+
+w = 1. + 5*np.arange(L)[::-1]
+budget = 10*sum(w)
+constraint1 = Bounds(np.ones((L,)), np.inf*np.ones((L,)), keep_feasible=True)
+constraint2 = LinearConstraint(w, budget, budget)
+constraint2 = {"type":"eq", "fun" : lambda x : w.dot(x) - budget}
+
+res = minimize(objective, np.ones((L,)), bounds = constraint1, constraints=constraint2, method="SLSQP", options={"ftol":1.0e-6,"disp":True}, tol = 1.0e-6)
