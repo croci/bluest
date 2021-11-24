@@ -22,16 +22,18 @@ for k in range(1, K+1):
     groups[k-1] = np.array(groups[k-1])
     invcovs[k-1] = np.vstack(invcovs[k-1]).flatten()
 
-
-delta = 0.05
+delta = 0.0
 cumsizes = np.cumsum(sizes)
 L = cumsizes[-1]
 
 print("Problem size: ", L)
 
-m0 = 1 + np.random.randint(100, size=L)
+w = 1. + 5*np.arange(L)[::-1]
+budget = 10*sum(w)
 
-def objective(m=m0):
+########################################################
+
+def objective(m, delta=delta):
     PHI = delta*np.eye(N).flatten()
     m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
     for k in range(1, K+1):
@@ -39,11 +41,13 @@ def objective(m=m0):
 
     PHI = PHI.reshape((N,N))
 
-    out = np.linalg.solve(PHI,np.eye(N,1).flatten())[0]
+    try: out = np.linalg.solve(PHI,np.eye(N,1).flatten())[0]
+    except np.linalg.LinAlgError:
+        out = np.linalg.pinvh(PHI)[0,0]
 
     return out
 
-def objective_with_grad(m=m0):
+def objective_with_grad(m):
     PHI = delta*np.eye(N).flatten()
     m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
     for k in range(1, K+1):
@@ -57,7 +61,6 @@ def objective_with_grad(m=m0):
     grad = np.concatenate([gradK(k, sizes[k], groups[k-1], invcovs[k-1], invPHI) for k in range(1,K+1)])
 
     return obj,grad
-
 
 @njit
 def gradK(k, Lk,groupsk,invcovsk,invPHI):
@@ -81,45 +84,100 @@ def objectiveK(k,Lk,mk,groupsk,invcovsk):
 
     return PHI
 
-out1 = objective(m0)
-
-def objective_slow(m=m0):
-    PHI = delta*np.eye(N)
-    m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
-    for k in range(1, K+1):
-        for i in range(sizes[k]):
-            PHI[indices[k-1][i]] += m[k-1][i]*invcovs_sq[k-1][i]
-
-    out = np.linalg.solve(PHI,np.eye(N,1).flatten())[0]
-    return out
-
-out2 = objective_slow(m0)
-
-assert abs(out1-out2) <= 1.0e-10
-
-out3,grad = objective_with_grad(m0)
-
 ########################################################
 
-from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds,line_search
-import scipy.sparse as sp
+def gurobi_solve():
+    import gurobipy as gp
+    from gurobipy import GRB
 
-print("Optimizing...")
+    def objective_gurobi(m,t):
+        PHI = delta*np.eye(N).flatten()
+        E = np.zeros((N*N,))
+        for k in range(1, K+1):
+            Lk = sizes[k]
+            mk = m[cumsizes[k-1]:cumsizes[k]]
+            groupsk = groups[k-1]
+            invcovsk = invcovs[k-1]
+            for i in range(Lk):
+                group = groupsk[i]
+                for j in range(k):
+                    for l in range(k):
+                        E[N*group[j] + group[l]] = 1.
+                        PHI = PHI + E*(mk[i]*invcovsk[k*k*i + k*j + l])
+                        E[N*group[j] + group[l]] = 0
 
-w = 1. + 5*np.arange(L)[::-1]
-budget = 10*sum(w)
-constraint1 = Bounds(int(abs(delta) < 1.e-10)*np.ones((L,)), np.inf*np.ones((L,)), keep_feasible=True)
-#constraint2 = LinearConstraint(w, budget, budget)
-constraint2 = {"type":"eq", "fun" : lambda x : w.dot(x) - budget}
+        out = np.zeros((N,))
+        e = np.zeros((N,))
+        for i in range(N):
+            for j in range(N):
+                e[i] = 1
+                out = out + e*(PHI[N*i + j]*t[j])
+                e[i] = 0
+        return out
 
-res = minimize(objective_with_grad, np.ones((L,)), jac=True, bounds = constraint1, constraints=constraint2, method="SLSQP", options={"ftol" : 1.0e-8, "disp" : True}, tol = 1.0e-8)
+    M = gp.Model("BLUE")
+    M.params.NonConvex = 2
+    m = M.addMVar(shape=(int(L),), lb=np.zeros((L,)), ub=np.ones((L,))*np.inf,vtype=GRB.CONTINUOUS, name="m")
+    t = M.addMVar(shape=(N,), vtype=GRB.CONTINUOUS, name="t")
+    M.setObjective(t[0], GRB.MINIMIZE)
+    M.addConstr(m@w == budget, name="budget")
+    M.addConstr(m >= 0, name="positivity")
+    ob = objective_gurobi(m,t)
+    M.addConstr(ob[0] == 1)
+    M.addConstrs((ob[i] == 0 for i in range(1,N)))
+    M.optimize()
 
-sol = res.x
+    return np.array(M.getAttr("X")[:L])
 
-print("\nFinding integer solution via informed brute force...\n")
+def cvxpy_solve(delta=0.01):
+    import cvxpy as cp
+
+    def objective_cvxpy(m):
+        PHI = delta*np.eye(N).flatten()
+        E = np.zeros((N*N,))
+        for k in range(1, K+1):
+            Lk = sizes[k]
+            mk = m[cumsizes[k-1]:cumsizes[k]]
+            groupsk = groups[k-1]
+            invcovsk = invcovs[k-1]
+            for i in range(Lk):
+                group = groupsk[i]
+                for j in range(k):
+                    for l in range(k):
+                        E[N*group[j] + group[l]] = 1.
+                        PHI = PHI + E*(mk[i]*invcovsk[k*k*i + k*j + l])
+                        E[N*group[j] + group[l]] = 0
+
+        PHI = cp.reshape(PHI, (N,N))
+        e = np.zeros((N,)); e[0] = 1
+        out = cp.matrix_frac(e, PHI)
+        return out
+
+    m = cp.Variable(L)
+    obj = cp.Minimize(objective_cvxpy(m))
+    constraints = [m >= 0.1*np.ones((L,)), w@m == budget]
+    prob = cp.Problem(obj, constraints)
+
+    prob.solve(verbose=True, solver="SCS", eps=1.0e-4)
+
+    return m.value
+
+def scipy_solve():
+    from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds,line_search
+    import scipy.sparse as sp
+
+    print("Optimizing...")
+
+    constraint1 = Bounds(0.1*np.ones((L,)), np.inf*np.ones((L,)), keep_feasible=True)
+    constraint2 = {"type":"eq", "fun" : lambda x : w.dot(x) - budget}
+
+    x0 = np.random.rand(L); x0 = x0/(x0@w)*budget
+    res = minimize(objective_with_grad, x0, jac=True, bounds = constraint1, constraints=constraint2, method="SLSQP", options={"ftol" : 1.0e-10, "disp" : True, "maxiter":1000}, tol = 1.0e-10)
+
+    return res.x
 
 def find_integer_opt(sol):
-    lb = np.maximum(np.floor(sol), int(abs(delta) < 1.e-10)*np.ones((L,)))
+    lb = np.maximum(np.floor(sol), np.zeros((L,)))
     ub = np.ceil(sol)
     bnds = np.vstack([lb,ub])
     r = np.arange(L)
@@ -133,48 +191,19 @@ def find_integer_opt(sol):
             best_fval = fval
             best_val = val
 
-    return best_val, best_fval, w.dot(best_val)
+    return best_val, best_fval
 
-val, fval, bval = find_integer_opt(sol)
-print("Objective value: ", fval, "\n\nOptimality gap: ", fval/res.fun)
-assert bval <= budget
-assert min(val) >= 0
+if __name__ == '__main__':
+    gurobi_sol = gurobi_solve()
+    cvxpy_sol  = cvxpy_solve()
+    scipy_sol  = scipy_solve()
 
+    sols = [gurobi_sol, cvxpy_sol, scipy_sol]
+    fvals = [objective(sol) for sol in sols]
 
-#def linesearch(xk, fk, gk):
-#    pk = -gk
-#    pk -= (w.dot(pk)/w.dot(w))*w
-#    alpha = 1/abs(pk).max()
-#    fnew = objective(xk + alpha*pk)
-#    m = -gk.dot(pk)
-#    it = 0
-#    while fk-fnew > alpha*m and it < 100:
-#        it += 1
-#        alpha /= 2
-#        fnew = objective(np.maximum(xk + alpha*pk, 0))
-#        assert False
-#        print(fk-fnew, alpha*m)
-#
-#    if it == 100: print("Linesearch failed")
-#    return np.maximum(xk + alpha*pk, 0)
-#
-#def proj_grad_desc(xk):
-#    fk,gk = objective_with_grad(xk)
-#    fkold = np.inf
-#    it = 0
-#    while abs(fk-fkold) > 1.0e-8 and it < 100:
-#        it += 1
-#        xk = linesearch(xk,fk,gk)
-#        fkold = fk + 0
-#        fk,gk = objective_with_grad(xk)
-#
-#    return xk
-#
-#x0 = 10*np.ones((L,))
-#res2 = proj_grad_desc(x0)
+    int_sols = [find_integer_opt(sol)[0] for sol in sols]
+    int_fvals = [objective(sol) for sol in int_sols]
 
-#eps = res.fun
-#constraint1 = LinearConstraint(np.eye(L), int(abs(delta) < 1.e-10)*np.ones((L,)), np.ones((L,))*np.inf, keep_feasible=True)
-#constraint2 = NonlinearConstraint(objective, 0, eps, jac = lambda x:objective_with_grad(x)[1])
-#res2 = minimize(lambda x: (w.dot(x),w), 10*np.random.rand(L), jac=True, hessp=lambda x,*args : np.zeros((L,)), constraints=[constraint1,constraint2], method="trust-constr", options={"disp" : True, 'initial_constr_penalty': 10.0, 'initial_tr_radius': 3.0, 'initial_barrier_parameter': 0.1, 'initial_barrier_tolerance': 0.1}, tol = 1.0e-8)
+    print(fvals)
+    print(int_fvals)
 

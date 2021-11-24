@@ -65,6 +65,9 @@ class BLUEProblem(object):
     #FIXME
     def find_optimal_sample_allocation(K, groups, budget):
         C = self.get_covariance()
+        #FIXME: filter groups out by groupsize and set up the
+        #       optimizaton problem
+
 
 
     def get_model_graph(self, C, **nodeargs):
