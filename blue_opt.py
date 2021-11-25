@@ -137,7 +137,7 @@ class BLUESampleAllocationProblem(object):
 
         if eps is None:
             print("Minimizing statistical error for fixed cost...\n")
-            if   solver == "gurobi": samples = self.gurobi_solve(budget)
+            if   solver == "gurobi": samples = self.gurobi_solve(budget=budget)
             elif solver == "cvxpy":  samples = self.cvxpy_solve(budget)
             elif solver == "scipy":  samples = self.scipy_solve(budget)
 
@@ -147,11 +147,11 @@ class BLUESampleAllocationProblem(object):
             samples,fval = best_closest_integer_solution(samples, objective, constraint)
             if np.isinf(fval):
                 print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
-                samples = self.gurobi_solve(budget, integer=True)
+                samples = self.gurobi_solve(budget=budget, integer=True)
 
         else:
             print("Minimizing cost given statistical error tolerance...\n")
-            samples = self.gurobi_solve(eps)
+            samples = self.gurobi_solve(eps=eps)
 
             objective   = lambda m : m@self.costs
             constraint  = lambda m : self.variance(m) <= eps**2
@@ -160,7 +160,7 @@ class BLUESampleAllocationProblem(object):
 
             if np.isinf(fval):
                 print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
-                samples = self.gurobi_solve(eps, integer=True)
+                samples = self.gurobi_solve(eps=eps, integer=True)
 
 
         self.samples = samples
@@ -223,8 +223,8 @@ class BLUESampleAllocationProblem(object):
         if min_cost:
             M.setObjective(m@w, GRB.MINIMIZE)
             M.addConstr(t[0] <= eps**2, name="variance")
-            #FIXME: need better constraint on minimum number of samples here
-            M.addConstr(sum(m) >= 1, name="minimum_samples")
+            e = np.array([int(0 in group) for groupsk in groups for group in groupsk])
+            M.addConstr(m@e >= 1, name="minimum_samples")
         else:
             M.setObjective(t[0], GRB.MINIMIZE)
             M.addConstr(m@w <= budget, name="budget")
@@ -236,7 +236,7 @@ class BLUESampleAllocationProblem(object):
 
         M.optimize()
 
-        return np.array(M.getAttr("X")[:L])
+        return np.array(m.X)
 
     def cvxpy_solve(self, budget, delta=0.01):
         import cvxpy as cp
@@ -308,7 +308,7 @@ if __name__ == '__main__':
     L = sum(len(groups[k-1]) for k in range(1,K+1))
     costs = 1. + 5*np.arange(L)[::-1]
     budget = 10*sum(costs)
-    eps = C[0,0]/100
+    eps = np.sqrt(C[0,0])/100
 
     print("Problem size: ", L)
 
@@ -317,7 +317,7 @@ if __name__ == '__main__':
     gurobi_sol = problem.solve(budget=budget, solver="gurobi")
     cvxpy_sol  = problem.solve(budget=budget, solver="cvxpy")
     scipy_sol  = problem.solve(budget=budget, solver="scipy")
-    gurobi_eps_sol = problem.solve(eps=eps, solver="gurobi")
+    #gurobi_eps_sol = problem.solve(eps=eps, solver="gurobi")
 
     sols = [gurobi_sol, cvxpy_sol, scipy_sol]
     fvals = [problem.variance(sol) for sol in sols]
