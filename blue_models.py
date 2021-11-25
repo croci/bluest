@@ -1,18 +1,32 @@
 import networkx as nx
 import numpy as np
 import matplotlib.pyplot as plt
+from blue_fn import blue_fn
+from blue_opt import BLUESampleAllocationProblem
+
+default_params = {
+                    "remove_uncorrelated" = True
+                    "optimization_solver" = "gurobi"
+                    }
 
 class BLUEProblem(object):
-    def __init__(self, M, C=None, N=100, **nodeargs):
+    def __init__(self, M, C=None, N=100, nodeargs={}, params={}):
         if C is None: C = np.nan*np.ones((M,M))
         self.M = M
+
+        self.what_to_sample = (None,None)
+
+        self.params = default_params
+        for key,value in params:
+            self.params[key] = value
+
         self.G = self.get_model_graph(C, **nodeargs)
 
         self.estimate_missing_covariances(N)
         if nodeargs.get('cost') is None:
             self.estimate_costs()
 
-        self.check_graph()
+        self.check_graph(remove_uncorrelated=self.params["remove_uncorrelated"])
 
     def evaluate(ls, samples):
         raise NotImplementedError
@@ -35,40 +49,56 @@ class BLUEProblem(object):
         C[maskinf] = 0
         return C
 
-    #FIXME
-    def solve(self, K=3, remove_uncorrelated=False, budget=None, eps=None):
+    def get_costs(self):
+        return np.array([self.G.nodes[l]['cost'] for l in range(self.M)])
+
+    def get_group_costs(self, groups):
+        model_costs = self.get_costs()
+        costs = np.array([sum(model_costs[group]) for group in groupsk for groupsk in groups])
+        return costs
+
+    def setup_solver(self, K=3, budget=None, eps=None, groups=None):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:
             eps = None
-        elif eps is not None:
-            raise NotImplementedError
 
-        if remove_uncorrelated:
-            for i in range(M):
-                for j in range(i,M):
-                    if np.isinf(self.G[i][j]["weight"]):
-                        self.G.remove_edge(i,j)
+        if groups is None:
+            flattened_groups = []
+            groups = [[] for k in range(K)]
+            for clique in nx.enumerate_all_cliques(self.G):
+                if len(clique) > K:
+                    break
+                groups[len(clique)-1].append(clique)
+                flattened_groups.append(clique)
+        else:
+            K = len(groups[-1])
+            new_groups = [[] for k in range(K)]
+            for group in groups:
+                new_groups[len(group)-1].append(group)
 
-        groups = []
-        for clique in nx.enumerate_all_cliques(self.G):
-            if len(clique) > K:
-                break
-            groups.append(clique)
+            flattened_groups = groups.copy()
+            groups = new_groups
 
-        sample_list = self.find_optimal_sample_allocation(K, groups, budget)
-        
-        for ls,N in zip(groups, sample_list):
-            sumse,sumsc,cost = self.blue_fn(ls, N)
-            do_something_with_this_output() #FIXME
+        C = self.get_covariance() # this has some NaNs, but these should never come up
+        costs = self.get_group_costs(groups)
+
+        sample_allocation_problem = BLUESampleAllocationProblem(C, K, groups, costs)
+        sample_list = sample_allocation_problem.solve(budget=budget, eps=eps, solver=self.params["optimization_solver"])
+
+        self.what_to_sample = (flattened_groups, sample_list)
 
     #FIXME
-    def find_optimal_sample_allocation(K, groups, budget):
-        C = self.get_covariance()
-        #FIXME: filter groups out by groupsize and set up the
-        #       optimizaton problem
+    def solve(self, K=3, budget=None, eps=None, groups=None):
+        if self.what_to_sample[0] is None:
+            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups)
 
-
+        flattened_groups, sample_list = self.what_to_sample
+        
+        for ls,N in zip(flattened_groups, sample_list):
+            if N == 0: continue
+            sumse,sumsc,cost = self.blue_fn(ls, N)
+            do_something_with_this_output() #FIXME
 
     def get_model_graph(self, C, **nodeargs):
         '''
@@ -90,7 +120,7 @@ class BLUEProblem(object):
         maskinf = np.isinf(C)
         mask0   = C == 0
         C[mask0] = np.inf
-        C[maskinf] = 0
+        C[maskinf] = 0    # if set to zero, then the graph won't have an edge there
 
         G = nx.from_numpy_matrix(C)
 
@@ -100,7 +130,14 @@ class BLUEProblem(object):
 
         return G
 
-    def check_graph(self):
+    def check_graph(self, remove_uncorrelated=False):
+
+        if remove_uncorrelated:
+            for i in range(M):
+                for j in range(i,M):
+                    if np.isinf(self.G[i][j]["weight"]):
+                        self.G.remove_edge(i,j)
+
         if not nx.is_connected(self.G):
             print("WARNING! Model graph is not connected, pruning disconnected subgraph...")
             comp = nx.node_connected_component(self.G, 0)
@@ -117,6 +154,8 @@ class BLUEProblem(object):
         C_hat = sumsc/N - np.outer(sumse/N,sumse/N)
         for i,j,c in self.G.edges(data=True):
             if np.isnan(c['weight']):
+                if abs(C_hat[i,j]/np.sqrt(C_hat[i,i]*C_hat[j,j])) < 1.0e-7:
+                    C_hat[i,j] = np.inf # mark as uncorrelated
                 self.G[i][j]['weight'] = C_hat[i,j]
 
     def estimate_costs(self, N=2):

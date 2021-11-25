@@ -7,8 +7,9 @@ N = 10
 K = 3
 
 C = np.random.randn(N,N); C = C.T@C
+C2 = np.random.randn(N,N); C2 = C2.T@C2
 
-groups,indices,invcovs,invcovs_sq = [[[] for k in range(K)] for i in range(4)]
+groups,indices,invcovs,invcovs2,invcovs_sq = [[[] for k in range(K)] for i in range(5)]
 sizes = [0]
 for k in range(1, K+1):
     for comb in combinations(range(N), k):
@@ -16,14 +17,16 @@ for k in range(1, K+1):
         idx = np.array([comb])
         indices[k-1].append((idx.T, idx))
         invcovs[k-1].append(np.linalg.inv(C[indices[k-1][-1]]))
+        invcovs2[k-1].append(np.linalg.inv(C2[indices[k-1][-1]]))
         invcovs_sq[k-1].append(invcovs[k-1][-1])
 
     sizes += [len(groups[k-1])]
     groups[k-1] = np.array(groups[k-1])
     invcovs[k-1] = np.vstack(invcovs[k-1]).flatten()
+    invcovs2[k-1] = np.vstack(invcovs2[k-1]).flatten()
 
 
-delta = 1
+delta = 0
 cumsizes = np.cumsum(sizes)
 L = cumsizes[-1]
 
@@ -34,7 +37,7 @@ m0 = 1 + np.random.randint(100, size=L)
 w = 1. + 5*np.arange(L)[::-1]
 budget = 10*sum(w)
 
-def objective(m):
+def objective(m, invcovs=invcovs):
     PHI = delta*np.eye(N).flatten()
     m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
     for k in range(1, K+1):
@@ -42,7 +45,9 @@ def objective(m):
 
     PHI = PHI.reshape((N,N))
 
-    out = np.linalg.solve(PHI,np.eye(N,1).flatten())[0]
+    try: out = np.linalg.solve(PHI,np.eye(N,1).flatten())[0]
+    except np.linalg.LinAlgError:
+        out = np.linalg.pinv(PHI)[0,0]
 
     return out
 
@@ -93,44 +98,97 @@ out3,grad = objective_with_grad(m0)
 import gurobipy as gp
 from gurobipy import GRB
 
-def objective_gurobi(m,t):
-    PHI = delta*np.eye(N).flatten()
-    E = np.zeros((N*N,))
-    for k in range(1, K+1):
-        Lk = sizes[k]
-        mk = m[cumsizes[k-1]:cumsizes[k]]
-        groupsk = groups[k-1]
-        invcovsk = invcovs[k-1]
-        for i in range(Lk):
-            group = groupsk[i]
-            for j in range(k):
-                for l in range(k):
-                    E[N*group[j] + group[l]] = 1.
-                    PHI = PHI + E*(mk[i]*invcovsk[k*k*i + k*j + l])
-                    E[N*group[j] + group[l]] = 0
+#def gurobi_solve():
+#
+#    def objective_gurobi(m,t):
+#        PHI = delta*np.eye(N).flatten()
+#        E = np.zeros((N*N,))
+#        for k in range(1, K+1):
+#            Lk = sizes[k]
+#            mk = m[cumsizes[k-1]:cumsizes[k]]
+#            groupsk = groups[k-1]
+#            invcovsk = invcovs[k-1]
+#            for i in range(Lk):
+#                group = groupsk[i]
+#                for j in range(k):
+#                    for l in range(k):
+#                        E[N*group[j] + group[l]] = 1.
+#                        PHI = PHI + E*(mk[i]*invcovsk[k*k*i + k*j + l])
+#                        E[N*group[j] + group[l]] = 0
+#
+#        out = np.zeros((N,))
+#        e = np.zeros((N,))
+#        for i in range(N):
+#            for j in range(N):
+#                e[i] = 1
+#                out = out + e*(PHI[N*i + j]*t[j])
+#                e[i] = 0
+#        return out
+#
+#    M = gp.Model("BLUE")
+#    M.params.NonConvex = 2
+#    m = M.addMVar(shape=(int(L),), lb=np.zeros((L,)), ub=np.ones((L,))*np.inf,vtype=GRB.CONTINUOUS, name="m")
+#    t = M.addMVar(shape=(N,), vtype=GRB.CONTINUOUS, name="t")
+#    M.setObjective(t[0], GRB.MINIMIZE)
+#    M.addConstr(m@w == budget, name="budget")
+#    M.addConstr(m >= 0, name="positivity")
+#    ob = objective_gurobi(m,t)
+#    M.addConstr(ob[0] == 1)
+#    M.addConstrs((ob[i] == 0 for i in range(1,N)))
+#    M.optimize()
+#
+#    gurobi_sol = np.array(M.getAttr("X")[:L])
+#    return gurobi_sol
 
-    out = np.zeros((N,))
-    e = np.zeros((N,))
-    for i in range(N):
-        for j in range(N):
-            e[i] = 1
-            out = out + e*(PHI[N*i + j]*t[j])
-            e[i] = 0
-    return out
+def gurobi_solve(eps=1.0e-1):
 
-M = gp.Model("BLUE")
-M.params.NonConvex = 2
-m = M.addMVar(shape=(int(L),), lb=np.zeros((L,)), ub=np.ones((L,))*np.inf,vtype=GRB.CONTINUOUS, name="m")
-t = M.addMVar(shape=(N,), vtype=GRB.CONTINUOUS, name="t")
-M.setObjective(t[0], GRB.MINIMIZE)
-M.addConstr(m@w == budget, name="budget")
-M.addConstr(m >= 0, name="positivity")
-ob = objective_gurobi(m,t)
-M.addConstr(ob[0] == 1)
-M.addConstrs((ob[i] == 0 for i in range(1,N)))
-M.optimize()
+    def objective_gurobi(m,t,invcovs=invcovs):
+        PHI = delta*np.eye(N).flatten()
+        E = np.zeros((N*N,))
+        for k in range(1, K+1):
+            Lk = sizes[k]
+            mk = m[cumsizes[k-1]:cumsizes[k]]
+            groupsk = groups[k-1]
+            invcovsk = invcovs[k-1]
+            for i in range(Lk):
+                group = groupsk[i]
+                for j in range(k):
+                    for l in range(k):
+                        E[N*group[j] + group[l]] = 1.
+                        PHI = PHI + E*(mk[i]*invcovsk[k*k*i + k*j + l])
+                        E[N*group[j] + group[l]] = 0
 
-gurobi_sol = np.array(M.getAttr("X")[:L])
+        out = np.zeros((N,))
+        e = np.zeros((N,))
+        for i in range(N):
+            for j in range(N):
+                e[i] = 1
+                out = out + e*(PHI[N*i + j]*t[j])
+                e[i] = 0
+        return out
+
+    M = gp.Model("BLUE")
+    M.params.NonConvex = 2
+    m = M.addMVar(shape=(int(L),), lb=np.zeros((L,)), ub=np.ones((L,))*np.inf,vtype=GRB.CONTINUOUS, name="m")
+    t = M.addMVar(shape=(N,), vtype=GRB.CONTINUOUS, name="t")
+    t2 = M.addMVar(shape=(N,), vtype=GRB.CONTINUOUS, name="t2")
+    M.setObjective(m@w, GRB.MINIMIZE)
+    M.addConstr(t[0] <= eps**2, name="variance")
+    M.addConstr(t2[0] <= eps**2, name="variance2")
+    ob = objective_gurobi(m,t, invcovs)
+    ob2 = objective_gurobi(m,t2,invcovs2)
+    M.addConstr(ob[0] == 1)
+    M.addConstrs((ob[i] == 0 for i in range(1,N)))
+    M.addConstr(ob2[0] == 1)
+    M.addConstrs((ob2[i] == 0 for i in range(1,N)))
+    M.optimize()
+
+    gurobi_sol = np.array(M.getAttr("X")[:L])
+    return gurobi_sol
+
+gurobi_sol = gurobi_solve()
+
+sys.exit(0)
 
 import cvxpy as cp
 
