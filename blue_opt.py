@@ -61,6 +61,7 @@ class BLUESampleAllocationProblem(object):
         self.costs = costs
         self.samples = None
 
+        flattened_groups = []
         invcovs = [[] for k in range(K)]
         sizes = [0] + [len(groupsk) for groupsk in groups]
         for k in range(1, K+1):
@@ -69,17 +70,62 @@ class BLUESampleAllocationProblem(object):
                 idx = np.array([groupsk[i]])
                 index = (idx.T, idx)
                 invcovs[k-1].append(np.linalg.inv(C[index]))
+                flattened_groups.append(groupsk[i])
 
             groups[k-1] = np.array(groups[k-1])
             invcovs[k-1] = np.vstack(invcovs[k-1]).flatten()
 
-        self.sizes   = sizes
-        self.groups  = groups
-        self.invcovs = invcovs
-        self.cumsizes = np.cumsum(sizes)
-        self.L = self.cumsizes[-1]
+        self.sizes            = sizes
+        self.groups           = groups
+        self.flattened_groups = flattened_groups
+        self.invcovs          = invcovs
+        self.cumsizes         = np.cumsum(sizes)
+        self.L                = self.cumsizes[-1]
 
         self.variance, self.variance_with_grad = self.get_variance_functions()
+
+    def compute_BLUE_estimator(self, sums):
+        C = self.C
+        K = self.K
+        L = self.L
+        groups   = self.groups
+        invcovs  = self.invcovs
+        sizes    = self.sizes
+        cumsizes = self.cumsizes
+
+        y = np.zeros((L,))
+        sums = [sums[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
+        for k in range(1, K+1):
+            for i in range(sizes[k]):
+                for j in range(k):
+                    y[groups[k][i][j]] += invcovs[k-1][i]@sums[k][i]
+
+        def PHIinvY0(m, y, delta=0.0):
+            if abs(m).max() < 0.05: return np.inf
+            PHI = delta*np.eye(N).flatten()
+            m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
+            for k in range(1, K+1):
+                PHI += objectiveK(k,sizes[k],m[k-1],groups[k-1],invcovs[k-1])
+
+            PHI = PHI.reshape((N,N))
+            idx = get_nnz_rows_cols(m,groups)
+            PHI = PHI[idx]
+            y   = y[idx[0].flatten()]
+
+            assert idx[0].min() == 0 # the model 0 must always be sampled if this triggers something is wrong
+
+            try:
+                mu = np.linalg.solve(PHI,y)[0]
+                var = np.linalg.solve(PHI, np.eye(len(y), 1).flatten())[0]
+            except np.linalg.LinAlgError:
+                assert False # after the above fix we should never get here
+                pinvPHI = np.linalg.pinv(PHI)
+                mu  = (pinvPHI@y)[0]
+                var = pinvPHI[0,0] 
+
+            return mu, var
+
+        return PHIinvY0(self.samples, y)
 
     def get_variance_functions(self):
         C = self.C
@@ -294,7 +340,6 @@ class BLUESampleAllocationProblem(object):
         res = minimize(self.variance_with_grad, x0, jac=True, bounds = constraint1, constraints=constraint2, method="SLSQP", options={"ftol" : 1.0e-10, "disp" : True, "maxiter":1000}, tol = 1.0e-10)
 
         return res.x
-
 
 if __name__ == '__main__':
     from math import comb
