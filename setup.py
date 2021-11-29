@@ -20,8 +20,8 @@ setuptools.setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: Linux",
     ],
-    package_dir={"": "src"},
-    py_modules=['bluest'],
-    packages=setuptools.find_packages(where="src"),
+    packages=["bluest"],
+    package_dir={"bluest": "bluest"},
+    #packages=setuptools.find_packages(where="bluest"),
     python_requires=">=3.7",
 )
