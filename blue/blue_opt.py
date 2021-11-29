@@ -1,7 +1,6 @@
 import numpy as np
 from numba import njit
 from itertools import combinations, combinations_with_replacement
-import sys
 
 ########################################################
 
@@ -342,7 +341,6 @@ class BLUESampleAllocationProblem(object):
         return res.x
 
 if __name__ == '__main__':
-    from math import comb
 
     N = 10
     K = 3

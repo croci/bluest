@@ -1,8 +1,8 @@
 import numpy as np
 import networkx as nx
-from blue_fn import blue_fn
-from blue_opt import BLUESampleAllocationProblem
-from spg import spg
+from .blue_fn import blue_fn
+from .blue_opt import BLUESampleAllocationProblem
+from .spg import spg
 
 default_params = {
                     "remove_uncorrelated" : True,
