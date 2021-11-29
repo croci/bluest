@@ -1,11 +1,27 @@
-from setuptools import setup, find_packages
+import setuptools
 
-import glob, os
-dir_path = os.path.dirname(os.path.realpath(__file__))
-scripts = [file for file in glob.glob(dir_path + "/*.py")]
+with open("README.md", "r", encoding="utf-8") as fh:
+    long_description = fh.read()
 
-setup(
-    name="blue",
-    version="1.0",
-    packages=["blue"],
+setuptools.setup(
+    name="bluest",
+    version="1.0.0",
+    author="Matteo Croci",
+    author_email="matteo.croci@austin.utexas.edu",
+    description="BLUE estimator library for Python",
+    long_description=long_description,
+    long_description_content_type="text/markdown",
+    url="https://github.com/croci/blue/",
+    project_urls={
+        "Bug Tracker": "https://github.com/croci/blue/issues",
+    },
+    classifiers=[
+        "Programming Language :: Python :: 3",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: Linux",
+    ],
+    package_dir={"": "src"},
+    py_modules=['bluest'],
+    packages=setuptools.find_packages(where="src"),
+    python_requires=">=3.7",
 )
