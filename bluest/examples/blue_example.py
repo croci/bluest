@@ -1,56 +1,92 @@
 from dolfin import *
+from bluest import *
+from numpy.random import RandomState
+import numpy as np
+import math
+import sys
 
 set_log_level(30)
 
 mpiRank = MPI.rank(MPI.comm_world)
 
-class TestFunctional(OutputFunctional):
-    def evaluate(self, V, sample = None, rv_sample = None, level_info = (None,None)):
+RNG = RandomState(mpiRank)
 
-        u = TrialFunction(V)
-        v = TestFunction(V)
+dim = 2 # spatial dimension
+n_levels  = 6
 
-        sol = Function(V)
+meshes = [RectangleMesh(MPI.comm_self, Point(0,0), Point(1,1), 2**l, 2**l) for l in range(1, n_levels+1)][::-1]
 
-        lhs = inner(exp(sample)*grad(u), grad(v))*dx
-        rhs = Constant(1.0)*v*dx
+function_spaces = [FunctionSpace(mesh, 'CG', 1) for mesh in meshes]
 
-        bcs = DirichletBC(u.function_space(), Constant(0.0), 'on_boundary')
+left   = CompiledSubDomain("near(x[0], 0) && on_boundary")
+right  = CompiledSubDomain("near(x[0], 1) && on_boundary")
+bottom = CompiledSubDomain("near(x[1], 0) && on_boundary")
+top    = CompiledSubDomain("near(x[1], 1) && on_boundary")
 
-        solve(lhs == rhs, sol, bcs)
+def get_bcs(V, sample):
+    _,b,c,d,_ = sample # a = 0
 
-        E1 = assemble(sol*sol*dx)
-        E2 = assemble(inner(grad(sol),grad(sol))*dx)
+    b = math.exp(b); c = c**2; d = math.sqrt(math.fabs(d))
+    bottom_bexpr = Expression("b*sin(10*DOLFIN_PI*x[0])", b=b, degree=3)
+    left_bexpr   = Expression("c*sin(6*DOLFIN_PI*x[1])",  c=c, degree=3)
+    top_bexpr    = Expression("c + (d-c)*x[0]", c=c, d=d, degree=1)
+    right_bexpr  = Expression("b + (d-b)*x[1]", b=b, d=d, degree=1)
 
-        # NOTE: the output of an OutputFunctional must always be a list!!!
-        return [E1, E2]
+    left_bc   = DirichletBC(V, left_bexpr, left)
+    right_bc  = DirichletBC(V, right_bexpr, right)
+    top_bc    = DirichletBC(V, top_bexpr, top)
+    bottom_bc = DirichletBC(V, bottom_bexpr, bottom)
 
-    def get_n_outputs(self):
-        return 2
+    return [left_bc, right_bc, top_bc, bottom_bc]
 
-if __name__ == '__main__':
+class PoissonProblem(BLUEProblem):
+    def sampler(self, ls, N=1):
+        L = len(ls)
+        sample = RNG.randn(5)
+        return [sample.copy() for i in range(L)]
 
-    from numpy.random import RandomState
-    import sys
+    def evaluate(self, ls, samples, N=1):
 
-    dim = 2 # spatial dimension
-    n_levels  = 6
+        L = len(ls)
+        out = [0 for i in range(L)]
 
-    try: N = int(sys.argv[1])
-    except IndexError: 
-        raise ValueError("Must specify the number of samples for MLMC convergence tests!")
+        for i in range(L):
+            if ls[i] > n_levels-1:
+                out[i] = sum(samples[i]**2)
+                continue
 
-    RNG = RandomState(mpiRank)
+            V = function_spaces[ls[i]]
 
-    outer_meshes = [RectangleMesh(MPI.comm_self, Point(-1,-1), Point(1,1), 2**(l+1), 2**(l+1)) for l in range(1, n_levels+1)]
-    inner_meshes = [RectangleMesh(MPI.comm_self, Point(-0.5,-0.5), Point(0.5,0.5), 2**l, 2**l) for l in range(1, n_levels+1)]
+            u = TrialFunction(V)
+            v = TestFunction(V)
 
-    outer_spaces = [FunctionSpace(mesh, 'CG', 1) for mesh in outer_meshes]
-    inner_spaces = [FunctionSpace(mesh, 'CG', 1) for mesh in inner_meshes]
+            sol = Function(V)
 
-    matern_field = MaternField(inner_spaces, outer_spaces = outer_spaces, parameters = matern_parameters, nested_inner_outer = True, nested_hierarchy = False)
-    mlmc_sampler = MLMCSampler(inner_spaces, stochastic_field = matern_field, output_functional = TestFunctional(), richardson_alpha = None)
+            D = Constant(exp(samples[i][0]))
+            f = Expression("e*sin(exp(x[0]*x[1])) + (1-e)*exp(3*cos(x[1]+x[0]))", degree=3, e=samples[i][-1]**2)
 
-    Eps = [5.0e-4/2**i for i in range(7)]
+            lhs = inner(D*grad(u), grad(v))*dx + u*v*dx
+            rhs = f*v*dx
 
-    #run
+            bcs = get_bcs(V, samples[i])
+
+            solve(lhs == rhs, sol, bcs)
+
+            out[i] = assemble(inner(grad(sol),grad(sol))*dx)
+
+        return out
+
+problem = PoissonProblem(n_levels+1, covariance_estimation_samples=50)
+print(problem.get_correlation())
+
+problem.setup_solver(K=3, budget=1.,solver="gurobi")
+#problem.setup_solver(K=3, eps=10,solver="gurobi")
+
+out = problem.solve()
+
+#TODO: 1- cost comparison with MFMC
+#      2- introduce some NaNs in the covariance
+
+# NOTE: if you want to estimate the complexity of BLUE you should
+#       play with the tolerances, e.g.
+#Eps = [5.0e-4/2**i for i in range(7)]

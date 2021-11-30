@@ -8,11 +8,12 @@ default_params = {
                     "remove_uncorrelated" : True,
                     "optimization_solver" : "gurobi",
                     "covariance_estimation_samples" : 100,
+                    "sample_batch_size": 1,
                     }
 
 # Are any checks on the correlation matrix necessary?
 class BLUEProblem(object):
-    def __init__(self, M, C=None, costs=None, params={}):
+    def __init__(self, M, C=None, costs=None, **params):
         '''
             INPUT:
 
@@ -33,7 +34,7 @@ class BLUEProblem(object):
 
         self.default_params = default_params
         self.params = default_params
-        for key,value in params:
+        for key,value in params.items():
             self.params[key] = value
 
         self.G = self.get_model_graph(C, costs=costs)
@@ -44,11 +45,15 @@ class BLUEProblem(object):
 
         self.check_graph(remove_uncorrelated=self.params["remove_uncorrelated"])
 
-    def evaluate(ls, samples):
+        print("BLUE estimator ready.")
+
+    #NOTE: N here is the number of samples to be taken per time
+    def evaluate(self, ls, samples, N=1):
         ''' must be implemented by the user'''
         raise NotImplementedError
     
-    def sampler(N, ls):
+    #NOTE: N here is the number of samples to be taken per time
+    def sampler(self, ls, N=1):
         ''' must be implemented by the user'''
         raise NotImplementedError
 
@@ -57,14 +62,16 @@ class BLUEProblem(object):
 
     def get_group_costs(self, groups):
         model_costs = self.get_costs()
-        costs = np.array([sum(model_costs[group]) for group in groupsk for groupsk in groups])
+        costs = np.array([sum(model_costs[group]) for groupsk in groups for group in groupsk])
         return costs
 
-    def setup_solver(self, K=3, budget=None, eps=None, groups=None):
+    def setup_solver(self, K=3, budget=None, eps=None, groups=None, solver=None):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:
             eps = None
+        if solver is None:
+            solver=self.params["optimization_solver"]
 
         if groups is None:
             flattened_groups = []
@@ -88,22 +95,32 @@ class BLUEProblem(object):
 
         print("Computing optimal sample allocation...")
         self.sample_allocation_problem = BLUESampleAllocationProblem(C, K, groups, costs)
-        self.sample_allocation_problem.solve(budget=budget, eps=eps, solver=self.params["optimization_solver"])
+        self.sample_allocation_problem.solve(budget=budget, eps=eps, solver=solver)
 
         if budget is not None:
             var = self.sample_allocation_problem.variance(self.sample_allocation_problem.samples)
             N_MC = C[0,0]/var
             cost_MC = N_MC*costs[0] 
-            print("BLUE cost: ", budget, "MC cost: ", cost_MC, "Savings: ", cost_MC/budget)
+            print("\nBLUE cost: ", budget, "MC cost: ", cost_MC, "Savings: ", cost_MC/budget)
         else:
             N_MC = C[0,0]/eps**2
             cost_MC = N_MC*costs[0] 
             cost_BLUE = self.sample_allocation_problem.samples@costs
-            print("BLUE cost: ", cost_BLUE, "MC cost: ", cost_MC, "Savings: ", cost_MC/cost_BLUE)
+            print("\nBLUE cost: ", cost_BLUE, "MC cost: ", cost_MC, "Savings: ", cost_MC/cost_BLUE)
+
+        which_groups = [self.sample_allocation_problem.flattened_groups[item] for item in np.argwhere(self.sample_allocation_problem.samples > 0).flatten()]
+        print("\nModel groups selected: %s\n" % which_groups)
 
     def solve(self, K=3, budget=None, eps=None, groups=None):
         if self.sample_allocation_problem is None:
             self.setup_solver(K=K, budget=budget, eps=eps, groups=groups)
+
+        elif budget is not None and budget != self.sample_allocation_problem.budget or eps is not None and eps != self.sample_allocation_problem.eps:
+            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups)
+        elif budget is None and eps is None and self.sample_allocation_problem.samples is None:
+            raise ValueError("Need to prescribe either a budget or an error tolerance to run the BLUE estimator")
+
+        print("Sampling BLUE...\n")
 
         flattened_groups = self.sample_allocation_problem.flattened_groups
         sample_list      = self.sample_allocation_problem.samples
@@ -155,8 +172,8 @@ class BLUEProblem(object):
     def check_graph(self, remove_uncorrelated=False):
 
         if remove_uncorrelated:
-            for i in range(M):
-                for j in range(i,M):
+            for i in range(self.M):
+                for j in range(i,self.M):
                     if np.isinf(self.G[i][j]["weight"]):
                         self.G.remove_edge(i,j)
 
@@ -177,21 +194,22 @@ class BLUEProblem(object):
             that cannot be coupled), and with infs
             replaced by 0 (uncorrelated models).
         '''
-        C = nx.adjacency_matrix(self.G)
+        C = nx.adjacency_matrix(self.G).toarray()
         mask0 = C == 0
         maskinf = np.isinf(C)
         C[mask0] = np.nan
         C[maskinf] = 0
         return C
 
-    def get_correlation_matrix(self):
+    def get_correlation(self):
         C = self.get_covariance()
         s = np.sqrt(np.diag(C))
         return C/np.outer(s,s)
 
     def estimate_missing_covariances(self, N):
-        C = nx.adjacency_matrix(self.G)
-        ls = list(np.where(np.isnan(np.sum(CC,1)))[0])
+        print("Covariance estimation with %d samples..." % N)
+        C = nx.adjacency_matrix(self.G).toarray()
+        ls = list(np.where(np.isnan(np.sum(C,1)))[0])
         sumse,sumsc,cost = self.blue_fn(ls, N)
         C_hat = sumsc/N - np.outer(sumse/N,sumse/N)
         for i,j,c in self.G.edges(data=True):
@@ -236,25 +254,26 @@ class BLUEProblem(object):
         s = np.sqrt(np.diag(C_new))
         rho_new = C_new/np.outer(s,s)
         C_new[abs(rho_new) < 1.0e-7] = np.inf # mark uncorrelated models
-        C_new[np.isnan(C)] = np.nan           # keep uncoupled models uncoupled
+        C_new[np.isnan(C).reshape((self.M, self.M))] = np.nan # keep uncoupled models uncoupled
 
         for i in range(self.M):
             for j in range(self.M):
                 coupled = not np.isnan(C_new[i,j])
                 if self.G.has_edge(i,j):
-                    if coupled: self.G[i,j]['weight'] = C_new[i,j]
-                    else:       self.G[i,j]['weight'] = 0
+                    if coupled: self.G[i][j]['weight'] = C_new[i,j]
+                    else:       self.G[i][j]['weight'] = 0
                 elif coupled:
                     self.G.add_edge(i,j)
-                    self.G[i,j]['weight'] = C_new[i,j]
+                    self.G[i][j]['weight'] = C_new[i,j]
 
     def estimate_costs(self, N=2):
+        print("Cost estimation via sampling...")
         for l in range(self.M):
-            _,_,cost = self.blue_fn([l], N)
+            _,_,cost = self.blue_fn([l], N, verbose=False)
             self.G.nodes[l]['cost'] = cost/N
 
-    def blue_fn(self, ls, N):
-        return blue_fn(ls, N, self, self.sampler)
+    def blue_fn(self, ls, N, verbose=True):
+        return blue_fn(ls, N, self, self.sampler, N1=self.params["sample_batch_size"], verbose=verbose)
 
     def draw_model_graph(self):
         import matplotlib.pyplot as plt

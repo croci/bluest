@@ -40,7 +40,7 @@ def gradK(k, Lk,groupsk,invcovsk,invPHI):
     return grad
 
 @njit
-def objectiveK(k,Lk,mk,groupsk,invcovsk):
+def objectiveK(N, k,Lk,mk,groupsk,invcovsk):
     PHI = np.zeros((N*N,))
     for i in range(Lk):
         group = groupsk[i]
@@ -56,9 +56,12 @@ class BLUESampleAllocationProblem(object):
     def __init__(self, C, K, groups, costs):
 
         self.C = C
+        self.N = C.shape[0]
         self.K = K
         self.costs = costs
         self.samples = None
+        self.budget = None
+        self.eps = None
 
         flattened_groups = []
         invcovs = [[] for k in range(K)]
@@ -81,12 +84,15 @@ class BLUESampleAllocationProblem(object):
         self.cumsizes         = np.cumsum(sizes)
         self.L                = self.cumsizes[-1]
 
+        self.e = np.array([int(0 in group) for groupsk in groups for group in groupsk])
+
         self.variance, self.variance_with_grad = self.get_variance_functions()
 
     def compute_BLUE_estimator(self, sums):
         C = self.C
         K = self.K
         L = self.L
+        N = self.N
         groups   = self.groups
         invcovs  = self.invcovs
         sizes    = self.sizes
@@ -97,14 +103,15 @@ class BLUESampleAllocationProblem(object):
         for k in range(1, K+1):
             for i in range(sizes[k]):
                 for j in range(k):
-                    y[groups[k][i][j]] += invcovs[k-1][i]@sums[k][i]
+                    for s in range(k):
+                        y[groups[k-1][i][j]] += invcovs[k-1][k*k*i + k*j + s]*sums[k-1][i][s]
 
         def PHIinvY0(m, y, delta=0.0):
             if abs(m).max() < 0.05: return np.inf
             PHI = delta*np.eye(N).flatten()
             m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
             for k in range(1, K+1):
-                PHI += objectiveK(k,sizes[k],m[k-1],groups[k-1],invcovs[k-1])
+                PHI += objectiveK(N, k,sizes[k],m[k-1],groups[k-1],invcovs[k-1])
 
             PHI = PHI.reshape((N,N))
             idx = get_nnz_rows_cols(m,groups)
@@ -129,6 +136,7 @@ class BLUESampleAllocationProblem(object):
     def get_variance_functions(self):
         C = self.C
         K = self.K
+        N = self.N
         groups   = self.groups
         invcovs  = self.invcovs
         sizes    = self.sizes
@@ -139,7 +147,7 @@ class BLUESampleAllocationProblem(object):
             PHI = delta*np.eye(N).flatten()
             m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
             for k in range(1, K+1):
-                PHI += objectiveK(k,sizes[k],m[k-1],groups[k-1],invcovs[k-1])
+                PHI += objectiveK(N, k,sizes[k],m[k-1],groups[k-1],invcovs[k-1])
 
             PHI = PHI.reshape((N,N))
             idx = get_nnz_rows_cols(m,groups)
@@ -159,7 +167,7 @@ class BLUESampleAllocationProblem(object):
             PHI = delta*np.eye(N).flatten()
             m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
             for k in range(1, K+1):
-                PHI += objectiveK(k,sizes[k],m[k-1],groups[k-1],invcovs[k-1])
+                PHI += objectiveK(N, k,sizes[k],m[k-1],groups[k-1],invcovs[k-1])
 
             PHI = PHI.reshape((N,N))
             invPHI = np.linalg.pinv(PHI)
@@ -186,7 +194,7 @@ class BLUESampleAllocationProblem(object):
             elif solver == "cvxpy":  samples = self.cvxpy_solve(budget)
             elif solver == "scipy":  samples = self.scipy_solve(budget)
 
-            constraint = lambda m : m@self.costs <= budget
+            constraint = lambda m : m@self.costs <= budget and m@self.e >= 1
             objective  = self.variance
             
             samples,fval = best_closest_integer_solution(samples, objective, constraint)
@@ -199,7 +207,7 @@ class BLUESampleAllocationProblem(object):
             samples = self.gurobi_solve(eps=eps)
 
             objective   = lambda m : m@self.costs
-            constraint  = lambda m : self.variance(m) <= eps**2
+            constraint  = lambda m : self.variance(m) <= eps**2 and m@self.e >= 1
 
             samples,fval = best_closest_integer_solution(samples, objective, constraint)
 
@@ -208,7 +216,11 @@ class BLUESampleAllocationProblem(object):
                 samples = self.gurobi_solve(eps=eps, integer=True)
 
 
+        samples = samples.astype(int)
+
         self.samples = samples
+        self.budget = budget
+        self.eps = eps
 
         return samples
 
@@ -222,7 +234,9 @@ class BLUESampleAllocationProblem(object):
 
         K        = self.K
         L        = self.L
+        N        = self.N
         w        = self.costs
+        e        = self.e
         groups   = self.groups
         invcovs  = self.invcovs
         sizes    = self.sizes
@@ -268,11 +282,11 @@ class BLUESampleAllocationProblem(object):
         if min_cost:
             M.setObjective(m@w, GRB.MINIMIZE)
             M.addConstr(t[0] <= eps**2, name="variance")
-            e = np.array([int(0 in group) for groupsk in groups for group in groupsk])
             M.addConstr(m@e >= 1, name="minimum_samples")
         else:
             M.setObjective(t[0], GRB.MINIMIZE)
             M.addConstr(m@w <= budget, name="budget")
+            M.addConstr(m@e >= 1, name="minimum_samples")
 
         # enforcing the constraint that PHI^{-1}[:,0] = t
         constr = gurobi_constraint(m,t)
@@ -289,6 +303,8 @@ class BLUESampleAllocationProblem(object):
         K        = self.K
         L        = self.L
         w        = self.costs
+        e        = self.e
+        N        = self.N
         groups   = self.groups
         invcovs  = self.invcovs
         sizes    = self.sizes
@@ -317,7 +333,7 @@ class BLUESampleAllocationProblem(object):
 
         m = cp.Variable(L)
         obj = cp.Minimize(objective_cvxpy(m))
-        constraints = [m >= 0.1*np.ones((L,)), w@m == budget]
+        constraints = [m >= 0.1*np.ones((L,)), w@m == budget, m@e >= 1]
         prob = cp.Problem(obj, constraints)
 
         prob.solve(verbose=True, solver="SCS", eps=1.0e-4)
@@ -327,35 +343,37 @@ class BLUESampleAllocationProblem(object):
     def scipy_solve(self, budget):
         from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds,line_search
 
-        L        = self.L
-        w        = self.costs
+        L = self.L
+        w = self.costs
+        e = self.e
 
         print("Optimizing using scipy...")
 
         constraint1 = Bounds(0.1*np.ones((L,)), np.inf*np.ones((L,)), keep_feasible=True)
         constraint2 = {"type":"eq", "fun" : lambda x : w.dot(x) - budget}
+        constraint3 = {"type":"ineq", "fun" : lambda x : e.dot(x) - 1}
 
         x0 = np.random.rand(L); x0 = x0/(x0@w)*budget
-        res = minimize(self.variance_with_grad, x0, jac=True, bounds = constraint1, constraints=constraint2, method="SLSQP", options={"ftol" : 1.0e-10, "disp" : True, "maxiter":1000}, tol = 1.0e-10)
+        res = minimize(self.variance_with_grad, x0, jac=True, bounds = constraint1, constraints=[constraint2,constraint3], method="SLSQP", options={"ftol" : 1.0e-10, "disp" : True, "maxiter":1000}, tol = 1.0e-10)
 
         return res.x
 
 if __name__ == '__main__':
 
     N = 10
-    K = 3
+    KK = 3 # if this is set to K it messes up the class
 
     C = np.random.randn(N,N); C = C.T@C
 
-    groups = [[comb for comb in combinations(range(N), k)] for k in range(1, K+1)]
-    L = sum(len(groups[k-1]) for k in range(1,K+1))
+    groups = [[comb for comb in combinations(range(N), k)] for k in range(1, KK+1)]
+    L = sum(len(groups[k-1]) for k in range(1,KK+1))
     costs = 1. + 5*np.arange(L)[::-1]
     budget = 10*sum(costs)
     eps = np.sqrt(C[0,0])/100
 
     print("Problem size: ", L)
 
-    problem = BLUESampleAllocationProblem(C, K, groups, costs)
+    problem = BLUESampleAllocationProblem(C, KK, groups, costs)
 
     gurobi_sol = problem.solve(budget=budget, solver="gurobi")
     cvxpy_sol  = problem.solve(budget=budget, solver="cvxpy")

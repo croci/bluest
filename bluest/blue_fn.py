@@ -4,7 +4,7 @@ from numpy import random, zeros, array
 from numpy import sum as npsum
 from time import time
 
-def blue_fn(ls, N, problems, sampler=None, N1 = 1):
+def blue_fn(ls, N, problems, sampler=None, N1 = 1, verbose=True):
     """
     Inputs:
         ls: tuple with the indices of the coupled models to sample from
@@ -24,6 +24,7 @@ def blue_fn(ls, N, problems, sampler=None, N1 = 1):
             output: samples list so that samples[i] is the model
             ls[i] sample.
          N1: number of paths to generate concurrently.
+         verbose: boolean flag that turns progress bar on (True) or off (False)
 
     Outputs:
         (sumse, sumsc, cost) where sumse, sumsc are
@@ -41,14 +42,16 @@ def blue_fn(ls, N, problems, sampler=None, N1 = 1):
     coupled_problem = not isinstance(problems, list)
 
     if sampler is None:
-        def sampler(N, ls):
+        def sampler(ls, N):
             sample = random.randn(N)
             return [sample for i in range(L)]
+
+    if verbose: print("\rSampling models %s [%-50s] %d%%" % (ls, '', 0), end="\r")
 
     for i in range(1, N+1, N1):
         N2 = min(N1, N - i + 1)
 
-        samples = sampler(N2, ls)
+        samples = sampler(ls, N2)
 
         start = time()
         if coupled_problem:
@@ -61,9 +64,13 @@ def blue_fn(ls, N, problems, sampler=None, N1 = 1):
         sumse += array([npsum(Ps[i]) for i in range(L)])
         sumsc += array([[npsum(Ps[i]*Ps[j]) for i in range(L)] for j in range(L)])
 
+        if verbose: print("\rSampling models %s [%-50s] %d%%" % (ls, '='*int(round(50*(i+1)/N)), int(round(100*(i+1)/N))), end='\r')
+
+    if verbose: print('\rSampling of models %s completed. %s' % (ls, ' '*100))
+
     if coupled_problem and hasattr(problems, 'cost'):
         cost = N*problems.cost
-    elif all(hasattr(problems[i], 'cost') for i in range(L)):
+    elif not coupled_problem and all(hasattr(problems[i], 'cost') for i in range(L)):
         cost = N*npsum([problems[i].cost for i in range(L)])
     else:
         cost = cpu_cost
