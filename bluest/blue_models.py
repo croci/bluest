@@ -4,11 +4,21 @@ from .blue_fn import blue_fn
 from .blue_opt import BLUESampleAllocationProblem
 from .spg import spg
 
+spg_default_params = {"maxit" : 200,
+                      "maxfc" : 200**2,
+                      "verbose" : False,
+                      "eps"     : 1.0e-4,
+                      "lmbda_min" : 10.**-30,
+                      "lmbda_max" : 10.**30,
+                      "linesearch_history_length" : 10,
+                     }
+
 default_params = {
                     "remove_uncorrelated" : True,
                     "optimization_solver" : "gurobi",
                     "covariance_estimation_samples" : 100,
                     "sample_batch_size": 1,
+                    "spg_params" : spg_default_params,
                     }
 
 # Are any checks on the correlation matrix necessary?
@@ -33,9 +43,11 @@ class BLUEProblem(object):
         self.sample_allocation_problem = None
 
         self.default_params = default_params
-        self.params = default_params
-        for key,value in params.items():
-            self.params[key] = value
+        self.params = default_params.copy()
+        spg_params = spg_default_params.copy()
+        spg_params.update(params.get("spg_params", {}))
+        params["spg_params"] = spg_params
+        self.params.update(params)
 
         self.G = self.get_model_graph(C, costs=costs)
 
@@ -65,7 +77,7 @@ class BLUEProblem(object):
         costs = np.array([sum(model_costs[group]) for groupsk in groups for group in groupsk])
         return costs
 
-    def setup_solver(self, K=3, budget=None, eps=None, groups=None, solver=None):
+    def setup_solver(self, K=3, budget=None, eps=None, groups=None, solver=None, integer=False):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:
@@ -74,20 +86,27 @@ class BLUEProblem(object):
             solver=self.params["optimization_solver"]
 
         if groups is None:
+            K = min(K, self.M)
             flattened_groups = []
             groups = [[] for k in range(K)]
             for clique in nx.enumerate_all_cliques(self.G):
-                if len(clique) > K:
-                    break
-                groups[len(clique)-1].append(clique)
+                kn = len(clique)
+                if kn > K: break
+                groups[kn-1].append(clique)
                 flattened_groups.append(clique)
+
+            groups = [item for item in groups if len(item) > 0]
+            K = min(K, len(groups))
+
         else:
             K = len(groups[-1])
             new_groups = [[] for k in range(K)]
+            flattened_groups = []
             for group in groups:
-                new_groups[len(group)-1].append(group)
+                if is_subclique(self.G, group):
+                    new_groups[len(group)-1].append(group)
+                    flattened_groups.append(group)
 
-            flattened_groups = groups.copy()
             groups = new_groups
 
         C = self.get_covariance() # this has some NaNs, but these should never come up
@@ -95,7 +114,7 @@ class BLUEProblem(object):
 
         print("Computing optimal sample allocation...")
         self.sample_allocation_problem = BLUESampleAllocationProblem(C, K, groups, costs)
-        self.sample_allocation_problem.solve(budget=budget, eps=eps, solver=solver)
+        self.sample_allocation_problem.solve(budget=budget, eps=eps, solver=solver, integer=integer)
 
         if budget is not None:
             var = self.sample_allocation_problem.variance(self.sample_allocation_problem.samples)
@@ -111,12 +130,12 @@ class BLUEProblem(object):
         which_groups = [self.sample_allocation_problem.flattened_groups[item] for item in np.argwhere(self.sample_allocation_problem.samples > 0).flatten()]
         print("\nModel groups selected: %s\n" % which_groups)
 
-    def solve(self, K=3, budget=None, eps=None, groups=None):
+    def solve(self, K=3, budget=None, eps=None, groups=None, integer=False):
         if self.sample_allocation_problem is None:
-            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups)
+            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, integer=integer)
 
         elif budget is not None and budget != self.sample_allocation_problem.budget or eps is not None and eps != self.sample_allocation_problem.eps:
-            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups)
+            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, integer=integer)
         elif budget is None and eps is None and self.sample_allocation_problem.samples is None:
             raise ValueError("Need to prescribe either a budget or an error tolerance to run the BLUE estimator")
 
@@ -138,6 +157,18 @@ class BLUEProblem(object):
         mu,var = self.sample_allocation_problem.compute_BLUE_estimator(sums)
 
         return mu,var,total_cost
+
+    def complexity_test(self, eps, K=3):
+        print("Running cost complexity_test...")
+        tot_cost = []
+        for i in range(len(eps)):
+            self.setup_solver(K=K, eps=eps[i], solver="gurobi", integer=True)
+            tot_cost.append(sum(self.sample_allocation_problem.samples*self.sample_allocation_problem.costs))
+        tot_cost = np.array(tot_cost)
+        rate = np.polyfit(np.arange(len(tot_cost)), np.log2(tot_cost), 1)[0]
+        print("Total costs   :", tot_cost)
+        print("Estimated rate:", rate)
+        return tot_cost, rate
 
     def get_model_graph(self, C, costs=None):
         '''
@@ -174,7 +205,7 @@ class BLUEProblem(object):
         if remove_uncorrelated:
             for i in range(self.M):
                 for j in range(i,self.M):
-                    if np.isinf(self.G[i][j]["weight"]):
+                    if self.G.has_edge(i,j) and np.isinf(self.G[i][j]["weight"]):
                         self.G.remove_edge(i,j)
 
         if not nx.is_connected(self.G):
@@ -219,6 +250,9 @@ class BLUEProblem(object):
                 self.G[i][j]['weight'] = C_hat[i,j]
 
     def project_covariance(self):
+        
+        spg_params = self.params["spg_params"]
+
         # the covariance will have NaNs corresponding to entries that cannot be coupled
         C = self.get_covariance().flatten()
         mask = (~np.isnan(C)).astype(int)
@@ -235,15 +269,20 @@ class BLUEProblem(object):
             l[l<0] = 0
             return (V@np.diag(l)@V.T).flatten()
 
+        def am(C,mask):
+            X = C.copy()
+            X[abs(mask) < 1.0e-14] = 0
+            return X*mask
+
         def evalf(x):
-            return 0.5*sum((mask**2*(x - C))**2 + gamma*invmask**2*x**2)
+            return 0.5*sum(am(x - C, mask**2)**2 + gamma*am(x**2, invmask**2))
 
         def evalg(x):
-            return (mask**2*(x - C)) + gamma*(invmask**2*x)
+            return am(x - C, mask**2) + gamma*am(x, invmask**2)
 
-        x = proj(mask*C)
+        x = proj(am(C,abs(mask) > 1.0e-14))
         print("Running Spectral Gradient Descent for Covariance projection...")
-        res = spg(evalf, evalg, proj, x, iprint=False)
+        res = spg(evalf, evalg, proj, x, eps=spg_params["eps"], maxit=spg_params["maxit"], maxfc=spg_params["maxfc"], iprint=spg_params["verbose"], lmbda_min=spg_params["lmbda_min"], lmbda_max=spg_params["lmbda_max"], M=spg_params["linesearch_history_length"])
 
         if res["spginfo"] == 0:
             print("Covariance projected, projection error: ", res["f"])
@@ -279,6 +318,11 @@ class BLUEProblem(object):
         import matplotlib.pyplot as plt
         nx.draw(self.G)
         plt.show()
+
+def is_subclique(G,nodelist):
+    H = G.subgraph(nodelist)
+    n = len(nodelist)
+    return H.size() == (n*(n-1))//2
 
 if __name__ == '__main__':
     pass

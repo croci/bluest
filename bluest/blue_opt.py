@@ -182,38 +182,41 @@ class BLUESampleAllocationProblem(object):
 
         return variance,variance_with_grad
 
-    def solve(self, budget=None, eps=None, solver="gurobi"):
+    def solve(self, budget=None, eps=None, solver="gurobi", integer=False):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         if solver not in ["gurobi", "scipy", "cvxpy"]:
             raise ValueError("Optimization solvers available: 'gurobi', 'scipy' or 'cvxpy'")
+        if integer: solver="gurobi"
 
         if eps is None:
             print("Minimizing statistical error for fixed cost...\n")
-            if   solver == "gurobi": samples = self.gurobi_solve(budget=budget)
+            if   solver == "gurobi": samples = self.gurobi_solve(budget=budget, integer=integer)
             elif solver == "cvxpy":  samples = self.cvxpy_solve(budget)
             elif solver == "scipy":  samples = self.scipy_solve(budget)
 
-            constraint = lambda m : m@self.costs <= budget and m@self.e >= 1
-            objective  = self.variance
-            
-            samples,fval = best_closest_integer_solution(samples, objective, constraint)
-            if np.isinf(fval):
-                print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
-                samples = self.gurobi_solve(budget=budget, integer=True)
+            if not integer:
+                constraint = lambda m : m@self.costs <= budget and m@self.e >= 1
+                objective  = self.variance
+                
+                samples,fval = best_closest_integer_solution(samples, objective, constraint)
+                if np.isinf(fval):
+                    print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
+                    samples = self.gurobi_solve(budget=budget, integer=True)
 
         else:
             print("Minimizing cost given statistical error tolerance...\n")
-            samples = self.gurobi_solve(eps=eps)
+            samples = self.gurobi_solve(eps=eps, integer=integer)
 
-            objective   = lambda m : m@self.costs
-            constraint  = lambda m : self.variance(m) <= eps**2 and m@self.e >= 1
+            if not integer:
+                objective   = lambda m : m@self.costs
+                constraint  = lambda m : m@self.e >= 1 and self.variance(m) <= eps**2
 
-            samples,fval = best_closest_integer_solution(samples, objective, constraint)
+                samples,fval = best_closest_integer_solution(samples, objective, constraint)
 
-            if np.isinf(fval):
-                print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
-                samples = self.gurobi_solve(eps=eps, integer=True)
+                if np.isinf(fval):
+                    print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
+                    samples = self.gurobi_solve(eps=eps, integer=True)
 
 
         samples = samples.astype(int)

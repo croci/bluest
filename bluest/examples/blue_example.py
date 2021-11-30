@@ -76,17 +76,41 @@ class PoissonProblem(BLUEProblem):
 
         return out
 
-problem = PoissonProblem(n_levels+1, covariance_estimation_samples=50)
+M = n_levels + 1
+
+def build_test_covariance(string="full"):
+    C = np.nan*np.ones((M,M))
+    if string == "--O":
+        C[0,2:] = np.inf
+        C[2:,0] = np.inf
+        C[1,3:] = np.inf
+        C[3:,1] = np.inf
+    elif string == "gaps":
+        C[0,2] = np.inf
+        C[2,0] = np.inf
+        C[2,6] = np.inf
+        C[6,2] = np.inf
+    elif string == "MLMC":
+        for i in range(M):
+            C[i,i+2:] = np.inf
+            C[i+2:,i] = np.inf
+    else: pass
+    return C
+
+C = build_test_covariance("--O")
+problem = PoissonProblem(M, C=C, covariance_estimation_samples=50, spg_params={"maxit":10000, "maxfc":10**6, "verbose":False})
 print(problem.get_correlation())
 
-problem.setup_solver(K=3, budget=1.,solver="gurobi")
-#problem.setup_solver(K=3, eps=10,solver="gurobi")
+complexity_test = False
+if complexity_test:
+    eps = 2**np.arange(3,8)
+    tot_cost, rate = problem.complexity_test(eps, K=3)
+    sys.exit(0)
+
+problem.setup_solver(K=3, budget=1., solver="gurobi")
+#problem.setup_solver(K=3, eps=10, solver="gurobi")
 
 out = problem.solve()
 
 #TODO: 1- cost comparison with MFMC
 #      2- introduce some NaNs in the covariance
-
-# NOTE: if you want to estimate the complexity of BLUE you should
-#       play with the tolerances, e.g.
-#Eps = [5.0e-4/2**i for i in range(7)]
