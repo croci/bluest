@@ -57,7 +57,7 @@ class BLUEProblem(object):
 
         self.check_graph(remove_uncorrelated=self.params["remove_uncorrelated"])
 
-        print("BLUE estimator ready.")
+        print("BLUE estimator ready.\n")
 
     #NOTE: N here is the number of samples to be taken per time
     def evaluate(self, ls, samples, N=1):
@@ -155,8 +155,33 @@ class BLUEProblem(object):
             total_cost += cost
 
         mu,var = self.sample_allocation_problem.compute_BLUE_estimator(sums)
+        err = np.sqrt(var)
 
-        return mu,var,total_cost
+        return mu,err,total_cost
+
+    def solve_mc(self, budget=None, eps=None):
+        if budget is None and eps is None:
+            raise ValueError("Need to specify either budget or RMSE tolerance")
+        elif budget is not None and eps is not None:
+            eps = None
+
+        var  = self.get_covariance()[0,0]
+        cost = self.get_costs()[0]
+
+        if budget is not None:
+            N_MC = int(np.floor(budget/cost))
+            err  = np.sqrt(var/N_MC) 
+            tot_cost = N_MC*cost
+        else:
+            N_MC = int(np.ceil(var/eps**2))
+            tot_cost = N_MC*cost
+            err = np.sqrt(var/N_MC)
+
+        print("\nSampling standard MC estimator...\n")
+        sumse,_,_ = self.blue_fn([0], N_MC)
+        mu = sumse[0]/N_MC
+
+        return mu,err,tot_cost
 
     def complexity_test(self, eps, K=3):
         print("Running cost complexity_test...")
@@ -316,7 +341,17 @@ class BLUEProblem(object):
 
     def draw_model_graph(self):
         import matplotlib.pyplot as plt
-        nx.draw(self.G)
+        from matplotlib.colors import to_rgba
+        G = self.G
+        rho = self.get_correlation()
+        edge_color_pair = [to_rgba("seagreen"), to_rgba("tab:blue")]
+        pos = nx.shell_layout(G)
+        edges = G.edges()
+        nodes = list(G)
+        weights = np.array([abs(rho[u][v]) for u,v in edges]); weights -= min(weights); weights /= max(weights); weights = 4*weights + 1
+        edge_colors = np.array([edge_color_pair[int(rho[u][v] > 0)] for u,v in edges])
+        node_colors = np.array([G.nodes[l]['cost'] for l in nodes]); node_colors = plt.cm.jet(plt.Normalize()(np.log(node_colors)))
+        nx.draw(G, pos=pos, nodelist=nodes, edgelist=edges, width=weights, edge_color=edge_colors, node_color=node_colors)
         plt.show()
 
 def is_subclique(G,nodelist):

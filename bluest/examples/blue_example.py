@@ -42,7 +42,7 @@ def get_bcs(V, sample):
 class PoissonProblem(BLUEProblem):
     def sampler(self, ls, N=1):
         L = len(ls)
-        sample = RNG.randn(5)
+        sample = RNG.randn(5)/5
         return [sample.copy() for i in range(L)]
 
     def evaluate(self, ls, samples, N=1):
@@ -97,14 +97,24 @@ def build_test_covariance(string="full"):
     else: pass
     return C
 
-C = build_test_covariance("--O")
+C = build_test_covariance("gaps")
 problem = PoissonProblem(M, C=C, covariance_estimation_samples=50, spg_params={"maxit":10000, "maxfc":10**6, "verbose":False})
 print(problem.get_correlation())
 
 complexity_test = False
+standard_MC_test = True
 if complexity_test:
     eps = 2**np.arange(3,8)
     tot_cost, rate = problem.complexity_test(eps, K=3)
+    sys.exit(0)
+
+if standard_MC_test:
+    eps = 0.1
+    problem.setup_solver(K=3, eps=eps, solver="gurobi")
+    out = problem.solve()
+    out_MC = problem.solve_mc(eps=eps)
+    print("BLUE (mu, err, cost):", out)
+    print("MC   (mu, err, cost):", out_MC)
     sys.exit(0)
 
 problem.setup_solver(K=3, budget=1., solver="gurobi")
@@ -113,4 +123,4 @@ problem.setup_solver(K=3, budget=1., solver="gurobi")
 out = problem.solve()
 
 #TODO: 1- cost comparison with MFMC
-#      2- introduce some NaNs in the covariance
+#      2- compare actual result with standard MC
