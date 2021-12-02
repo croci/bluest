@@ -97,12 +97,14 @@ def build_test_covariance(string="full"):
     else: pass
     return C
 
-C = build_test_covariance("gaps")
+C = build_test_covariance("full")
 problem = PoissonProblem(M, C=C, covariance_estimation_samples=50, spg_params={"maxit":10000, "maxfc":10**6, "verbose":False})
 print(problem.get_correlation())
 
 complexity_test = False
-standard_MC_test = True
+standard_MC_test = False
+MFMC_test = True
+
 if complexity_test:
     eps = 2**np.arange(3,8)
     tot_cost, rate = problem.complexity_test(eps, K=3)
@@ -115,6 +117,17 @@ if standard_MC_test:
     out_MC = problem.solve_mc(eps=eps)
     print("BLUE (mu, err, cost):", out)
     print("MC   (mu, err, cost):", out_MC)
+    sys.exit(0)
+
+if MFMC_test:
+    #FIXME: add a comparison with MLMC.
+    budget=10.
+    out_MFMC = problem.solve_mfmc(budget=budget)
+    out_MC   = problem.solve_mc(budget=budget)
+    out      = problem.solve(K=M, budget=budget, solver="gurobi", integer=True)
+    print("MC   (mu, err, cost):", out_MC)
+    print("MFMC (mu, err, cost):", out_MFMC)
+    print("BLUE (mu, err, cost):", out)
     sys.exit(0)
 
 problem.setup_solver(K=3, budget=1., solver="gurobi")

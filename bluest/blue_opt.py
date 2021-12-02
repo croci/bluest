@@ -4,6 +4,40 @@ from itertools import combinations, combinations_with_replacement
 
 ########################################################
 
+def attempt_mlmc_setup(budget, sigmas, rhos, costs):
+    if not all(np.isfinite(sigmas)): return False,None
+
+    idx = np.argsort(abs(rhos))[::-1]
+    assert idx[0] == 0
+
+    s = sigmas[idx]
+    rho = np.concatenate([rhos[idx], [0]])
+    w = costs[idx]
+    cost_ratio = w[:-1]/w[1:]
+    rho_ratio = (rho[:-2]**2 - rho[1:-1]**2)/(rho[1:-1]**2 - rho[2:]**2)
+
+    feasible = all(cost_ratio > rho_ratio)
+    if not feasible: return feasible,None
+
+    alphas = rho[1:-1]*s[0]/s[1:]
+
+    r = np.sqrt(w[0]/w*(rho[:-1]**2 - rho[1:]**2)/(1-rho[1]**2))
+    m1 = budget/(w@r)
+    m = np.concatenate([[m1], m1*r[1:]])
+
+    variance = lambda m : s[0]**2/m[0] + sum((1/m[:-1]-1/m[1:])*(alphas**2*s[1:]**2 - 2*alphas*rho[1:-1]*s[0]*s[1:]))
+    constraint = lambda m : m@w <= budget and m[0] >= 1 and all(m[:-1] <= m[1:])
+
+    m,var = best_closest_integer_solution(m, variance, constraint)
+    if np.isinf(var): return False,None
+
+    err = np.sqrt(var)
+    tot_cost = m@w
+
+    mfmc_data = {"samples" : m, "error" : err, "total_cost" : tot_cost, "alphas" : alphas}
+
+    return feasible,mfmc_data
+
 def get_nnz_rows_cols(m,groups):
     K = len(m)
     out = np.unique(np.concatenate([groups[k][abs(m[k]) > 1.0e-6].flatten() for k in range(K)]))
@@ -26,7 +60,7 @@ def best_closest_integer_solution(sol, obj, constr):
                 best_fval = fval
                 best_val = val
 
-    return best_val, best_fval
+    return best_val.astype(int), best_fval
 
 @njit
 def gradK(k, Lk,groupsk,invcovsk,invPHI):

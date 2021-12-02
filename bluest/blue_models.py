@@ -1,7 +1,7 @@
 import numpy as np
 import networkx as nx
 from .blue_fn import blue_fn
-from .blue_opt import BLUESampleAllocationProblem
+from .blue_opt import BLUESampleAllocationProblem,attempt_mlmc_setup
 from .spg import spg
 
 spg_default_params = {"maxit" : 200,
@@ -77,6 +77,26 @@ class BLUEProblem(object):
         costs = np.array([sum(model_costs[group]) for groupsk in groups for group in groupsk])
         return costs
 
+    def reorder_model_graph_nodes(self, ordering=None):
+        M = self.M
+        G = self.G
+        H = nx.Graph()
+        sorted_nodes = sorted(G.nodes(data=True))
+        if ordering is None or (isinstance(ordering, str) and "asc" in ordering):
+            mapping = {i:i for i in range(M)}
+        elif isinstance(ordering, str) and "desc" in ordering:
+            mapping = {i:len(sorted_nodes)-i-1 for i in range(M)}
+            sorted_nodes = reversed(sorted_nodes)
+        elif isinstance(ordering, (list, np.ndarray)) and M == len(ordering):
+            mapping = {i:item for i,item in enumerate(ordering)}
+            sorted_nodes = [sorted_nodes[i] for i in ordering]
+        else:
+            raise ValueError("ordering must be 'asc', 'desc', 'ascending', 'descending' or an array/list with length equal to the number of nodes.")
+        H.add_nodes_from(sorted_nodes)
+        H.add_edges_from(G.edges(data=True))
+        H = nx.relabel_nodes(H, mapping)
+        self.G = H
+
     def setup_solver(self, K=3, budget=None, eps=None, groups=None, solver=None, integer=False):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
@@ -130,12 +150,13 @@ class BLUEProblem(object):
         which_groups = [self.sample_allocation_problem.flattened_groups[item] for item in np.argwhere(self.sample_allocation_problem.samples > 0).flatten()]
         print("\nModel groups selected: %s\n" % which_groups)
 
-    def solve(self, K=3, budget=None, eps=None, groups=None, integer=False):
+    def solve(self, K=3, budget=None, eps=None, groups=None, integer=False, solver=None):
+        if solver is None: solver = self.params["optimization_solver"]
         if self.sample_allocation_problem is None:
-            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, integer=integer)
+            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, integer=integer, solver=solver)
 
         elif budget is not None and budget != self.sample_allocation_problem.budget or eps is not None and eps != self.sample_allocation_problem.eps:
-            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, integer=integer)
+            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, integer=integer, solver=solver)
         elif budget is None and eps is None and self.sample_allocation_problem.samples is None:
             raise ValueError("Need to prescribe either a budget or an error tolerance to run the BLUE estimator")
 
@@ -158,6 +179,58 @@ class BLUEProblem(object):
         err = np.sqrt(var)
 
         return mu,err,total_cost
+
+    def setup_mlmc(self, budget):
+        #FIXME.
+        pass
+
+    def setup_mfmc(self, budget):
+        sigmas = np.sqrt(np.diag(self.get_covariance()))
+        rhos = self.get_correlation()[0,:]
+        w = self.get_costs()
+
+        print("Setting up optimal MFMC estimator...\n") 
+        best_group = None
+        min_err = np.inf
+        best_data = {}
+        clique_list = [clique for clique in nx.enumerate_all_cliques(self.G) if 0 in clique]
+        for clique in clique_list:
+            assert clique[0] == 0
+            feasible,mfmc_data = attempt_mlmc_setup(budget, sigmas[clique], rhos[clique], w[clique])
+            if not feasible: continue
+            if mfmc_data["error"] < min_err:
+                best_group = clique
+                best_data.update(mfmc_data)
+
+        print("Best MFMC estimator found. Coupled models:", best_group, " Error: ", best_data["error"], " Cost: ", best_data["total_cost"])
+        return best_group, best_data
+
+    def solve_mfmc(self, budget):
+        best_group, mfmc_data = self.setup_mfmc(budget)
+
+        samples  = mfmc_data["samples"]
+        err      = mfmc_data["error"]
+        tot_cost = mfmc_data["total_cost"]
+        alphas   = mfmc_data["alphas"]
+
+        print("\nSampling optimal MFMC estimator...\n")
+
+        L = len(best_group)
+        y = np.zeros((L,))
+        y1 = np.zeros((L-1,))
+        for i in range(L):
+            N = samples[i]
+            if i > 0: N -= samples[i-1]
+            sumse,_,_ = self.blue_fn(best_group[i:], N)
+            y[i:] += sumse
+            if i < L-1: y1[i:] += sumse[1:]
+
+        y  /= samples
+        y1 /= samples[:-1]
+
+        mu = y[0] + sum(alphas*(y[1:]-y1))
+
+        return mu, err, tot_cost
 
     def solve_mc(self, budget=None, eps=None):
         if budget is None and eps is None:
@@ -223,6 +296,9 @@ class BLUEProblem(object):
             for l in range(M):
                 G.nodes[l]['cost'] = costs[l]
 
+        for l in range(M):
+            G.nodes[l]['model_number'] = l
+
         return G
 
     def check_graph(self, remove_uncorrelated=False):
@@ -237,8 +313,8 @@ class BLUEProblem(object):
             print("WARNING! Model graph is not connected, pruning disconnected subgraph...")
             comp = nx.node_connected_component(self.G, 0)
             SG = self.G.subgraph(comp).copy()
-            SG = nx.convert_node_labels_to_integers(SG, label_attribute="model_number")
-            print("Done. New model graph size is %d. Model numbers saved as new graph attributes." % SG.number_of_nodes())
+            SG = nx.convert_node_labels_to_integers(SG)
+            print("Done. New model graph size is %d." % SG.number_of_nodes())
             self.G = SG
             self.M = SG.number_of_nodes()
 
