@@ -1,7 +1,8 @@
 import numpy as np
 import networkx as nx
+from itertools import combinations
 from .blue_fn import blue_fn
-from .blue_opt import BLUESampleAllocationProblem,attempt_mlmc_setup
+from .blue_opt import BLUESampleAllocationProblem,attempt_mlmc_setup,attempt_mfmc_setup
 from .spg import spg
 
 spg_default_params = {"maxit" : 200,
@@ -51,13 +52,24 @@ class BLUEProblem(object):
 
         self.G = self.get_model_graph(C, costs=costs)
 
+        if costs is None: self.estimate_costs()
+        self.check_costs(warning=True) # Sending a warning just in case
+        
         self.estimate_missing_covariances(self.params["covariance_estimation_samples"])
         self.project_covariance()
-        if costs is None: self.estimate_costs()
 
         self.check_graph(remove_uncorrelated=self.params["remove_uncorrelated"])
 
         print("BLUE estimator ready.\n")
+
+    def check_costs(self, warning=False):
+        costs = self.get_costs()
+        if costs[0] != costs.max():
+            more_expensive_models = [self.G.nodes[i]["model_number"] for i in costs[costs > costs[0]]]
+            message_error = "Model zero is not the most expensive model. Consider removing the more expensive models %s" % more_expensive_models
+            message_warning = "WARNING! Model zero is not the most expensive model and some estimators won't run in this setting. The more expensive models are: %s" % more_expensive_models
+            if warning: print(message_warning)
+            else: raise ValueError(message_error)
 
     #NOTE: N here is the number of samples to be taken per time
     def evaluate(self, ls, samples, N=1):
@@ -166,47 +178,138 @@ class BLUEProblem(object):
         sample_list      = self.sample_allocation_problem.samples
         
         sums = []
-        total_cost = 0
         for ls,N in zip(flattened_groups, sample_list):
             if N == 0:
                 sums.append(np.zeros_like(ls))
                 continue
-            sumse,sumsc,cost = self.blue_fn(ls, N)
+            sumse,_,_ = self.blue_fn(ls, N)
             sums.append(sumse)
-            total_cost += cost
 
         mu,var = self.sample_allocation_problem.compute_BLUE_estimator(sums)
         err = np.sqrt(var)
+        tot_cost = self.sample_allocation_problem.tot_cost
 
-        return mu,err,total_cost
+        return mu,err,tot_cost
 
-    def setup_mlmc(self, budget):
-        #FIXME.
-        pass
+    def setup_mlmc(self, budget=None, eps=None):
+        if budget is None and eps is None:
+            raise ValueError("Need to specify either budget or RMSE tolerance")
+        elif budget is not None and eps is not None:
+            eps = None
 
-    def setup_mfmc(self, budget):
+        M = self.M
+
+        self.check_costs()
+
+        w = self.get_costs()
+        idx = np.argsort(w)[::-1]
+        assert idx[0] == 0
+
+        print("Setting up optimal MLMC estimator...\n") 
+
+        # get all groups that incude model 0 and are feasible for MLMC with models ordered by cost
+        groups = [[0]]
+        for i in range(M-1):
+            for remove in combinations(range(1,M),i):
+                keep = np.array([i for i in range(M) if i not in remove])
+                group = list(idx[keep])
+                if all([self.G.has_edge(i,j) for i,j in zip(group[:-1],group[1:])]):
+                    groups.append(group)
+
+        best_group = None
+        min_err  = np.inf
+        min_cost = np.inf
+        best_data = {}
+        C = self.get_covariance()
+        for group in groups:
+            assert group[0] == 0
+            # getting actual MLMC costs and variances
+            subC = C[np.ix_(group,group)]
+            subw = w[group].copy()
+            if len(group) > 1:
+                v,corrs = np.diag(subC).copy(), np.diag(subC,1)
+                v[:-1]    += v[1:] - 2*corrs
+                subw[:-1] += subw[1:]
+            else: v = subC[0]
+            feasible, mlmc_data = attempt_mlmc_setup(v, subw, budget=budget, eps=eps)
+            if not feasible: continue
+            if mlmc_data["error"] < min_err:
+                min_err = mlmc_data["error"]
+                best_group = group
+                best_data.update(mlmc_data)
+            if mlmc_data["total_cost"] < min_cost:
+                min_cost = mlmc_data["total_cost"]
+                best_group = group
+                best_data.update(mlmc_data)
+
+        print("Best MLMC estimator found. Coupled models:", best_group, " Error: ", best_data["error"], " Cost: ", best_data["total_cost"])
+        return best_group, best_data
+
+    def solve_mlmc(self, budget=None, eps=None):
+        if budget is None and eps is None:
+            raise ValueError("Need to specify either budget or RMSE tolerance")
+        elif budget is not None and eps is not None:
+            eps = None
+
+        best_group, mlmc_data = self.setup_mlmc(budget=budget, eps=eps)
+
+        samples  = mlmc_data["samples"]
+        err      = mlmc_data["error"]
+        tot_cost = mlmc_data["total_cost"]
+
+        print("\nSampling optimal MLMC estimator...\n")
+
+        L = len(best_group)
+        groups = [item for item in zip(best_group[:-1],best_group[1:])] + [[best_group[-1]]]
+        mu = 0
+        for i in range(L):
+            N = samples[i]
+            sumse,_,_ = self.blue_fn(groups[i], N)
+            if i < L-1: mu += (sumse[0]-sumse[1])/N
+            else:       mu += sumse[0]/N
+
+        return mu, err, tot_cost
+
+    def setup_mfmc(self, budget=None, eps=None):
+        if budget is None and eps is None:
+            raise ValueError("Need to specify either budget or RMSE tolerance")
+        elif budget is not None and eps is not None:
+            eps = None
+
         sigmas = np.sqrt(np.diag(self.get_covariance()))
         rhos = self.get_correlation()[0,:]
         w = self.get_costs()
 
         print("Setting up optimal MFMC estimator...\n") 
+
         best_group = None
-        min_err = np.inf
+        min_err  = np.inf
+        min_cost = np.inf
         best_data = {}
         clique_list = [clique for clique in nx.enumerate_all_cliques(self.G) if 0 in clique]
         for clique in clique_list:
             assert clique[0] == 0
-            feasible,mfmc_data = attempt_mlmc_setup(budget, sigmas[clique], rhos[clique], w[clique])
+            feasible,mfmc_data = attempt_mfmc_setup(sigmas[clique], rhos[clique], w[clique], budget=budget, eps=eps)
             if not feasible: continue
-            if mfmc_data["error"] < min_err:
+            if budget is not None and mfmc_data["error"] < min_err:
                 best_group = clique
+                min_err = mfmc_data["error"]
+                best_data.update(mfmc_data)
+            elif eps is not None and mfmc_data["total_cost"] < min_cost:
+                best_group = clique
+                min_cost = mfmc_data["total_cost"]
                 best_data.update(mfmc_data)
 
         print("Best MFMC estimator found. Coupled models:", best_group, " Error: ", best_data["error"], " Cost: ", best_data["total_cost"])
         return best_group, best_data
 
-    def solve_mfmc(self, budget):
-        best_group, mfmc_data = self.setup_mfmc(budget)
+    def solve_mfmc(self, budget=None, eps=None):
+        if budget is None and eps is None:
+            raise ValueError("Need to specify either budget or RMSE tolerance")
+        elif budget is not None and eps is not None:
+            eps = None
+
+        best_group, mfmc_data = self.setup_mfmc(budget=budget, eps=eps)
 
         samples  = mfmc_data["samples"]
         err      = mfmc_data["error"]
@@ -249,6 +352,8 @@ class BLUEProblem(object):
             N_MC = int(np.ceil(var/eps**2))
             tot_cost = N_MC*cost
             err = np.sqrt(var/N_MC)
+
+        print("Standard MC estimator ready. Error: ", err, "Cost: ", tot_cost)
 
         print("\nSampling standard MC estimator...\n")
         sumse,_,_ = self.blue_fn([0], N_MC)

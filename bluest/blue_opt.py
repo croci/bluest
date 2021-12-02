@@ -4,7 +4,39 @@ from itertools import combinations, combinations_with_replacement
 
 ########################################################
 
-def attempt_mlmc_setup(budget, sigmas, rhos, costs):
+def attempt_mlmc_setup(v, w, budget=None, eps=None):
+    if budget is None and eps is None:
+        raise ValueError("Need to specify either budget or RMSE tolerance")
+    elif budget is not None and eps is not None:
+        eps = None
+
+    if not all(np.isfinite(v)): return False,None
+
+    q = sum(np.sqrt(v*w))
+    if budget is not None: mu = budget/q
+    else:                  mu = q/eps**2
+    m = mu*np.sqrt(v/w)
+
+    variance = lambda m : sum(v/m)
+    if budget is not None: constraint = lambda m : m@w <= budget and all(m >= 1)
+    else:                  constraint = lambda m : variance(m) <= eps**2 and all(m >= 1)
+
+    m,var = best_closest_integer_solution(m, variance, constraint)
+    if np.isinf(var): return False,None
+
+    err = np.sqrt(var)
+    tot_cost = m@w
+
+    mlmc_data = {"samples" : m, "error" : err, "total_cost" : tot_cost}
+
+    return True,mlmc_data
+
+def attempt_mfmc_setup(sigmas, rhos, costs, budget=None, eps=None):
+    if budget is None and eps is None:
+        raise ValueError("Need to specify either budget or RMSE tolerance")
+    elif budget is not None and eps is not None:
+        eps = None
+
     if not all(np.isfinite(sigmas)): return False,None
 
     idx = np.argsort(abs(rhos))[::-1]
@@ -22,11 +54,13 @@ def attempt_mlmc_setup(budget, sigmas, rhos, costs):
     alphas = rho[1:-1]*s[0]/s[1:]
 
     r = np.sqrt(w[0]/w*(rho[:-1]**2 - rho[1:]**2)/(1-rho[1]**2))
-    m1 = budget/(w@r)
+    if budget is not None: m1 = budget/(w@r)
+    else:                  m1 = eps**-2*(w@r)*(s[0]**2/w[0])*(1-rho[1]**2)
     m = np.concatenate([[m1], m1*r[1:]])
 
     variance = lambda m : s[0]**2/m[0] + sum((1/m[:-1]-1/m[1:])*(alphas**2*s[1:]**2 - 2*alphas*rho[1:-1]*s[0]*s[1:]))
-    constraint = lambda m : m@w <= budget and m[0] >= 1 and all(m[:-1] <= m[1:])
+    if budget is not None: constraint = lambda m : m@w <= budget and m[0] >= 1 and all(m[:-1] <= m[1:])
+    else:                  constraint = lambda m : variance(m) <= eps**2 and m[0] >= 1 and all(m[:-1] <= m[1:])
 
     m,var = best_closest_integer_solution(m, variance, constraint)
     if np.isinf(var): return False,None
@@ -96,6 +130,7 @@ class BLUESampleAllocationProblem(object):
         self.samples = None
         self.budget = None
         self.eps = None
+        self.tot_cost = None
 
         flattened_groups = []
         invcovs = [[] for k in range(K)]
@@ -258,6 +293,7 @@ class BLUESampleAllocationProblem(object):
         self.samples = samples
         self.budget = budget
         self.eps = eps
+        self.tot_cost = samples@self.costs
 
         return samples
 

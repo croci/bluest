@@ -12,9 +12,10 @@ mpiRank = MPI.rank(MPI.comm_world)
 RNG = RandomState(mpiRank)
 
 dim = 2 # spatial dimension
+buf = 1
 n_levels  = 6
 
-meshes = [RectangleMesh(MPI.comm_self, Point(0,0), Point(1,1), 2**l, 2**l) for l in range(1, n_levels+1)][::-1]
+meshes = [RectangleMesh(MPI.comm_self, Point(0,0), Point(1,1), 2**l, 2**l) for l in range(buf, n_levels+buf)][::-1]
 
 function_spaces = [FunctionSpace(mesh, 'CG', 1) for mesh in meshes]
 
@@ -99,7 +100,7 @@ def build_test_covariance(string="full"):
 
 C = build_test_covariance("full")
 problem = PoissonProblem(M, C=C, covariance_estimation_samples=50, spg_params={"maxit":10000, "maxfc":10**6, "verbose":False})
-print(problem.get_correlation())
+print(problem.get_correlation(), "\n")
 
 complexity_test = False
 standard_MC_test = False
@@ -121,11 +122,14 @@ if standard_MC_test:
 
 if MFMC_test:
     #FIXME: add a comparison with MLMC.
-    budget=10.
-    out_MFMC = problem.solve_mfmc(budget=budget)
-    out_MC   = problem.solve_mc(budget=budget)
-    out      = problem.solve(K=M, budget=budget, solver="gurobi", integer=True)
-    print("MC   (mu, err, cost):", out_MC)
+    budget = 10.;  eps    = None
+    eps    = 0.25;  budget = None
+    out_MLMC = problem.solve_mlmc(budget=budget, eps=eps)
+    out_MFMC = problem.solve_mfmc(budget=budget, eps=eps)
+    #out_MC   = problem.solve_mc(budget=budget, eps=eps)
+    out      = problem.solve(K=M, budget=budget, eps=eps, solver="gurobi", integer=True)
+    #print("MC   (mu, err, cost):", out_MC)
+    print("MLMC (mu, err, cost):", out_MLMC)
     print("MFMC (mu, err, cost):", out_MFMC)
     print("BLUE (mu, err, cost):", out)
     sys.exit(0)
