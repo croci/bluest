@@ -133,6 +133,7 @@ class BLUESampleAllocationProblem(object):
         self.tot_cost = None
 
         flattened_groups = []
+        flattened_sq_invcovs = []
         invcovs = [[] for k in range(K)]
         sizes = [0] + [len(groupsk) for groupsk in groups]
         for k in range(1, K+1):
@@ -141,6 +142,7 @@ class BLUESampleAllocationProblem(object):
                 idx = np.array([groupsk[i]])
                 index = (idx.T, idx)
                 invcovs[k-1].append(np.linalg.inv(C[index]))
+                flattened_sq_invcovs.append(invcovs[k-1][-1])
                 flattened_groups.append(groupsk[i])
 
             groups[k-1] = np.array(groups[k-1])
@@ -149,13 +151,14 @@ class BLUESampleAllocationProblem(object):
         self.sizes            = sizes
         self.groups           = groups
         self.flattened_groups = flattened_groups
+        self.flattened_sq_invcovs = flattened_sq_invcovs
         self.invcovs          = invcovs
         self.cumsizes         = np.cumsum(sizes)
         self.L                = self.cumsizes[-1]
 
         self.e = np.array([int(0 in group) for groupsk in groups for group in groupsk])
 
-        self.variance, self.variance_with_grad = self.get_variance_functions()
+        self.variance, self.variance_with_grad_and_hess = self.get_variance_functions()
 
     def compute_BLUE_estimator(self, sums):
         C = self.C
@@ -204,6 +207,7 @@ class BLUESampleAllocationProblem(object):
 
     def get_variance_functions(self):
         C = self.C
+        L = self.L
         K = self.K
         N = self.N
         groups   = self.groups
@@ -231,7 +235,7 @@ class BLUESampleAllocationProblem(object):
 
             return out
 
-        def variance_with_grad(m, delta=0.0):
+        def variance_with_grad_and_hess(m, delta=0.0, nohess=False):
             if abs(m).max() < 0.05: return np.inf, np.inf*np.ones((L,))
             PHI = delta*np.eye(N).flatten()
             m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
@@ -245,11 +249,27 @@ class BLUESampleAllocationProblem(object):
             var = np.linalg.inv(PHI[idx])[0,0]
             #var = invPHI[0,0]
 
-            grad = np.concatenate([gradK(k, sizes[k], groups[k-1], invcovs[k-1], invPHI) for k in range(1,K+1)])
+            grad = -np.concatenate([gradK(k, sizes[k], groups[k-1], invcovs[k-1], invPHI) for k in range(1,K+1)])
 
-            return var,grad
+            def arr(x):
+                if isinstance(x,float):
+                    return np.array([x])
+                else: return x
 
-        return variance,variance_with_grad
+            if nohess:
+                return var,grad,None
+
+            hess = np.zeros((L,L))
+            ip = invPHI[:,0]
+            for k in range(L):
+                for s in range(k,L):
+                    hess[k,s] = arr(ip[np.array(self.flattened_groups[k])])@(self.flattened_sq_invcovs[k]@invPHI[np.ix_(self.flattened_groups[k],self.flattened_groups[s])]@self.flattened_sq_invcovs[s])@arr(ip[np.array(self.flattened_groups[s])])
+
+            hess += np.triu(hess,1).T
+
+            return var,grad,hess
+
+        return variance,variance_with_grad_and_hess
 
     def solve(self, budget=None, eps=None, solver="gurobi", integer=False):
         if budget is None and eps is None:
@@ -426,8 +446,14 @@ class BLUESampleAllocationProblem(object):
         constraint2 = {"type":"eq", "fun" : lambda x : w.dot(x) - budget}
         constraint3 = {"type":"ineq", "fun" : lambda x : e.dot(x) - 1}
 
-        x0 = np.random.rand(L); x0 = x0/(x0@w)*budget
-        res = minimize(self.variance_with_grad, x0, jac=True, bounds = constraint1, constraints=[constraint2,constraint3], method="SLSQP", options={"ftol" : 1.0e-10, "disp" : True, "maxiter":1000}, tol = 1.0e-10)
+        #constraint1 = LinearConstraint(np.eye(L), 0.0*np.ones((L,)), np.inf*np.ones((L,)), keep_feasible=True)
+        constraint1 = Bounds(0.0*np.ones((L,)), np.inf*np.ones((L,)), keep_feasible=True)
+        constraint2 = LinearConstraint(w, -np.inf, budget)
+        constraint3 = LinearConstraint(e, 1, np.inf, keep_feasible=True)
+
+        x0 = np.ceil(10*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w)
+        res = minimize(lambda x : self.variance_with_grad_and_hess(x,nohess=True,delta=0)[:-1], x0, jac=True, hess=lambda x : self.variance_with_grad_and_hess(x,delta=0)[-1], bounds=constraint1, constraints=[constraint2,constraint3], method="trust-constr", options={"factorization_method" : "SVDFactorization", "disp" : True, "maxiter":200}, tol = 1.0e-8)
+        #res = minimize(lambda x : self.variance_with_grad_and_hess(x)[:1], x0, jac=True, bounds = constraint1, constraints=[constraint2,constraint3], method="SLSQP", options={"ftol" : 1.0e-8, "disp" : True, "maxiter":100000}, tol = 1.0e-8)
 
         return res.x
 
@@ -448,12 +474,13 @@ if __name__ == '__main__':
 
     problem = BLUESampleAllocationProblem(C, KK, groups, costs)
 
-    gurobi_sol = problem.solve(budget=budget, solver="gurobi")
-    cvxpy_sol  = problem.solve(budget=budget, solver="cvxpy")
+    scipy_sol,cvxpy_sol,gurobi_sol = None,None,None
     scipy_sol  = problem.solve(budget=budget, solver="scipy")
+    #cvxpy_sol  = problem.solve(budget=budget, solver="cvxpy")
+    gurobi_sol = problem.solve(budget=budget, solver="gurobi")
     #gurobi_eps_sol = problem.solve(eps=eps, solver="gurobi")
 
     sols = [gurobi_sol, cvxpy_sol, scipy_sol]
-    fvals = [problem.variance(sol) for sol in sols]
+    fvals = [problem.variance(sol) for sol in sols if sol is not None]
 
     print(fvals)
