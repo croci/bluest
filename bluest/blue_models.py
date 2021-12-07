@@ -16,7 +16,7 @@ spg_default_params = {"maxit" : 200,
 
 default_params = {
                     "remove_uncorrelated" : True,
-                    "optimization_solver" : "gurobi",
+                    "optimization_solver" : "cvxpy",
                     "covariance_estimation_samples" : 100,
                     "sample_batch_size": 1,
                     "spg_params" : spg_default_params,
@@ -148,19 +148,19 @@ class BLUEProblem(object):
         self.sample_allocation_problem = BLUESampleAllocationProblem(C, K, groups, costs)
         self.sample_allocation_problem.solve(budget=budget, eps=eps, solver=solver, integer=integer)
 
-        if budget is not None:
-            var = self.sample_allocation_problem.variance(self.sample_allocation_problem.samples)
-            N_MC = C[0,0]/var
-            cost_MC = N_MC*costs[0] 
-            print("\nBLUE cost: ", budget, "MC cost: ", cost_MC, "Savings: ", cost_MC/budget)
-        else:
-            N_MC = C[0,0]/eps**2
-            cost_MC = N_MC*costs[0] 
-            cost_BLUE = self.sample_allocation_problem.samples@costs
-            print("\nBLUE cost: ", cost_BLUE, "MC cost: ", cost_MC, "Savings: ", cost_MC/cost_BLUE)
+        var = self.sample_allocation_problem.variance(self.sample_allocation_problem.samples)
+        cost_BLUE = self.sample_allocation_problem.samples@costs
+        N_MC = C[0,0]/var
+        cost_MC = N_MC*costs[0] 
+        print("\nBLUE cost: ", cost_BLUE, "MC cost: ", cost_MC, "Savings: ", cost_MC/cost_BLUE)
 
         which_groups = [self.sample_allocation_problem.flattened_groups[item] for item in np.argwhere(self.sample_allocation_problem.samples > 0).flatten()]
         print("\nModel groups selected: %s\n" % which_groups)
+        print("BLUE estimator setup. Error: ", np.sqrt(var), " Cost: ", cost_BLUE, "\n")
+
+        blue_data = {"samples" : self.sample_allocation_problem.samples, "error" : np.sqrt(var), "total_cost" : cost_BLUE}
+
+        return blue_data
 
     def solve(self, K=3, budget=None, eps=None, groups=None, integer=False, solver=None):
         if solver is None: solver = self.params["optimization_solver"]
@@ -242,7 +242,7 @@ class BLUEProblem(object):
                 best_group = group
                 best_data.update(mlmc_data)
 
-        print("Best MLMC estimator found. Coupled models:", best_group, " Error: ", best_data["error"], " Cost: ", best_data["total_cost"])
+        print("Best MLMC estimator found. Coupled models:", best_group, " Error: ", best_data["error"], " Cost: ", best_data["total_cost"], "\n")
         return best_group, best_data
 
     def solve_mlmc(self, budget=None, eps=None):
@@ -300,7 +300,7 @@ class BLUEProblem(object):
                 min_cost = mfmc_data["total_cost"]
                 best_data.update(mfmc_data)
 
-        print("Best MFMC estimator found. Coupled models:", best_group, " Error: ", best_data["error"], " Cost: ", best_data["total_cost"])
+        print("Best MFMC estimator found. Coupled models:", best_group, " Error: ", best_data["error"], " Cost: ", best_data["total_cost"], "\n")
         return best_group, best_data
 
     def solve_mfmc(self, budget=None, eps=None):
@@ -365,7 +365,8 @@ class BLUEProblem(object):
         print("Running cost complexity_test...")
         tot_cost = []
         for i in range(len(eps)):
-            self.setup_solver(K=K, eps=eps[i], solver="gurobi", integer=True)
+            self.setup_solver(K=K, eps=eps[i], solver="cvxpy")
+            #self.setup_solver(K=K, eps=eps[i], solver="gurobi", integer=True)
             tot_cost.append(sum(self.sample_allocation_problem.samples*self.sample_allocation_problem.costs))
         tot_cost = np.array(tot_cost)
         rate = np.polyfit(np.arange(len(tot_cost)), np.log2(tot_cost), 1)[0]

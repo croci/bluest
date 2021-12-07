@@ -95,6 +95,16 @@ def build_test_covariance(string="full"):
         for i in range(M):
             C[i,i+2:] = np.inf
             C[i+2:,i] = np.inf
+    elif string == "bad":
+        C[0,2:] = np.inf
+        C[2:,0] = np.inf
+        for i in range(M):
+            if i > 0 and i + 2 < M:
+                C[i,i+1] = np.inf
+                C[i+1,i] = np.inf
+            if i + 3 < M:
+                C[i,i+3] = np.inf
+                C[i+3,i] = np.inf
     else: pass
     return C
 
@@ -104,7 +114,7 @@ print(problem.get_correlation(), "\n")
 
 complexity_test = False
 standard_MC_test = False
-MFMC_test = True
+comparison_test = True
 
 if complexity_test:
     eps = 2**np.arange(3,8)
@@ -120,21 +130,30 @@ if standard_MC_test:
     print("MC   (mu, err, cost):", out_MC)
     sys.exit(0)
 
-if MFMC_test:
-    #FIXME: add a comparison with MLMC.
+if comparison_test:
     budget = 10.;  eps    = None
+
+    out_MLMC = problem.setup_mlmc(budget=budget, eps=eps)
+    out_MFMC = problem.setup_mfmc(budget=budget, eps=eps)
+    out      = problem.setup_solver(K=M, budget=budget, eps=eps, solver="cvxpy")
+
+    print("\nMLMC. Error: %f. Total cost: %f." % (out_MLMC[1]["error"], out_MLMC[1]["total_cost"]))
+    print("MFMC. Error: %f. Total cost: %f." % (out_MFMC[1]["error"], out_MFMC[1]["total_cost"]))
+    print("BLUE. Error: %f. Total cost: %f.\n\n" % (out["error"],      out["total_cost"]))
+
     eps    = 0.25;  budget = None
-    out_MLMC = problem.solve_mlmc(budget=budget, eps=eps)
-    out_MFMC = problem.solve_mfmc(budget=budget, eps=eps)
-    #out_MC   = problem.solve_mc(budget=budget, eps=eps)
-    out      = problem.solve(K=M, budget=budget, eps=eps, solver="gurobi", integer=True)
-    #print("MC   (mu, err, cost):", out_MC)
-    print("MLMC (mu, err, cost):", out_MLMC)
-    print("MFMC (mu, err, cost):", out_MFMC)
-    print("BLUE (mu, err, cost):", out)
+
+    out_MLMC = problem.setup_mlmc(budget=budget, eps=eps)
+    out_MFMC = problem.setup_mfmc(budget=budget, eps=eps)
+    out      = problem.setup_solver(K=M, budget=budget, eps=eps, solver="cvxpy")
+
+    print("\nMLMC. Error: %f. Total cost: %f." % (out_MLMC[1]["error"], out_MLMC[1]["total_cost"]))
+    print("MFMC. Error: %f. Total cost: %f." % (out_MFMC[1]["error"], out_MFMC[1]["total_cost"]))
+    print("BLUE. Error: %f. Total cost: %f." % (out["error"],      out["total_cost"]))
+
     sys.exit(0)
 
-problem.setup_solver(K=3, budget=1., solver="gurobi")
+problem.setup_solver(K=3, budget=1., solver="cvxpy")
 #problem.setup_solver(K=3, eps=10, solver="gurobi")
 
 out = problem.solve()

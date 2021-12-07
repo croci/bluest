@@ -1,6 +1,6 @@
 import numpy as np
-from numba import njit
-from itertools import combinations, combinations_with_replacement
+from numba import njit,jit
+from itertools import combinations, product
 
 ########################################################
 
@@ -72,31 +72,60 @@ def attempt_mfmc_setup(sigmas, rhos, costs, budget=None, eps=None):
 
     return feasible,mfmc_data
 
-def get_nnz_rows_cols(m,groups):
-    K = len(m)
+def get_nnz_rows_cols(m,groups,cumsizes):
+    K = len(cumsizes)-1
+    m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
     out = np.unique(np.concatenate([groups[k][abs(m[k]) > 1.0e-6].flatten() for k in range(K)]))
     return out.reshape((len(out),1)), out.reshape((1,len(out)))
 
 def best_closest_integer_solution(sol, obj, constr):
     L = len(sol)
-    lb = np.maximum(np.floor(sol), np.zeros((L,)))
-    ub = np.ceil(sol)
+    ss = np.round(sol).astype(int)
+    idx = np.argwhere(ss > 0).flatten()
+    LL = len(idx)
+
+    lb = np.zeros((L,)); ub = np.zeros((L,))
+    lb[idx] = np.floor(sol).astype(int)[idx]
+    ub[idx] = np.ceil(sol).astype(int)[idx]
     bnds = np.vstack([lb,ub])
-    r = np.arange(L)
-    best_val  = sol
+
+    best_val  = sol.copy()
     best_fval = np.inf
-    for item in combinations_with_replacement([0,1], L):
-        val = bnds[item, r]
+    for item in product([0,1], repeat=LL):
+        val = ss.copy()
+        val[idx] = bnds[item, idx]
         constraint_satisfied = constr(val)
         if constraint_satisfied:
             fval = obj(val)
             if fval < best_fval:
                 best_fval = fval
-                best_val = val
+                best_val = val.copy()
+                if LL > 15:
+                    return best_val.astype(int), best_fval
 
     return best_val.astype(int), best_fval
 
-@njit
+@njit(fastmath=True)
+def hessKQ(k, q, Lk, Lq, groupsk, groupsq, invcovsk, invcovsq, invPHI):
+    hess = np.zeros((Lk,Lq))
+    ip = invPHI[:,0]
+    ksq = k*k; qsq = q*q
+    for ik in range(Lk):
+        ipk = ip[groupsk[ik]]
+        for iq in range(Lq):
+            ipq = ip[groupsq[iq]]
+            iP = invPHI[groupsk[ik],:][:,groupsq[iq]]
+            #ipk@icovk@invPHI@icovq@ipq + the simmetric
+            #ipk_m Ck_ms*(sum_j iP_sj*(sumi_l Cq_jl*ipq_l)_j)_s
+            for lk in range(k):
+                for jk in range(k):
+                    for jq in range(q):
+                        for lq in range(q):
+                            hess[ik,iq] += ipk[lk]*invcovsk[ksq*ik + k*lk + jk]*iP[jk,jq]*invcovsq[qsq*iq + q*jq + lq]*ipq[lq]
+
+    return hess
+
+@njit(fastmath=True)
 def gradK(k, Lk,groupsk,invcovsk,invPHI):
     grad = np.zeros((Lk,))
     for i in range(Lk):
@@ -107,7 +136,7 @@ def gradK(k, Lk,groupsk,invcovsk,invPHI):
 
     return grad
 
-@njit
+@njit(fastmath=True)
 def objectiveK(N, k,Lk,mk,groupsk,invcovsk):
     PHI = np.zeros((N*N,))
     for i in range(Lk):
@@ -117,6 +146,16 @@ def objectiveK(N, k,Lk,mk,groupsk,invcovsk):
                 PHI[N*group[j]+group[l]] += mk[i]*invcovsk[k*k*i + k*j + l]
 
     return PHI
+
+@njit(fastmath=True)
+def fastobj(N,k,Lk,groupsk,invcovsk):
+    psi = np.zeros((N*N,Lk))
+    for i in range(Lk):
+        group = groupsk[i]
+        for j in range(k):
+            for l in range(k):
+                psi[N*group[j]+group[l], i] += invcovsk[k*k*i + k*j + l]
+    return psi
 
 ########################################################
 
@@ -158,7 +197,7 @@ class BLUESampleAllocationProblem(object):
 
         self.e = np.array([int(0 in group) for groupsk in groups for group in groupsk])
 
-        self.variance, self.variance_with_grad_and_hess = self.get_variance_functions()
+        self.get_variance_functions()
 
     def compute_BLUE_estimator(self, sums):
         C = self.C
@@ -180,13 +219,10 @@ class BLUESampleAllocationProblem(object):
 
         def PHIinvY0(m, y, delta=0.0):
             if abs(m).max() < 0.05: return np.inf
-            PHI = delta*np.eye(N).flatten()
-            m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
-            for k in range(1, K+1):
-                PHI += objectiveK(N, k,sizes[k],m[k-1],groups[k-1],invcovs[k-1])
 
-            PHI = PHI.reshape((N,N))
-            idx = get_nnz_rows_cols(m,groups)
+            self.get_phi(m,delta=delta)
+
+            idx = get_nnz_rows_cols(m,groups,cumsizes)
             PHI = PHI[idx]
             y   = y[idx[0].flatten()]
 
@@ -215,15 +251,28 @@ class BLUESampleAllocationProblem(object):
         sizes    = self.sizes
         cumsizes = self.cumsizes
 
+        self.psi = np.hstack([fastobj(N,k,sizes[k],groups[k-1],invcovs[k-1]) for k in range(1,K+1)])
+
+        def get_phi(m, delta=0.0, option=2):
+            if option == 1:
+                PHI = delta*np.eye(N).flatten()
+                m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
+                for k in range(1, K+1):
+                    PHI += objectiveK(N, k,sizes[k],m[k-1],groups[k-1],invcovs[k-1])
+
+                PHI = PHI.reshape((N,N))
+            else:
+                PHI = delta*np.eye(N) + (self.psi@m).reshape((N,N))
+
+            return PHI
+        
+        self.get_phi = get_phi
+
         def variance(m, delta=0.0):
             if abs(m).max() < 0.05: return np.inf
-            PHI = delta*np.eye(N).flatten()
-            m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
-            for k in range(1, K+1):
-                PHI += objectiveK(N, k,sizes[k],m[k-1],groups[k-1],invcovs[k-1])
+            PHI = get_phi(m,delta=delta)
 
-            PHI = PHI.reshape((N,N))
-            idx = get_nnz_rows_cols(m,groups)
+            idx = get_nnz_rows_cols(m,groups,cumsizes)
             PHI = PHI[idx]
 
             assert idx[0].min() == 0 # the model 0 must always be sampled if this triggers something is wrong
@@ -237,41 +286,32 @@ class BLUESampleAllocationProblem(object):
 
         def variance_with_grad_and_hess(m, delta=0.0, nohess=False):
             if abs(m).max() < 0.05: return np.inf, np.inf*np.ones((L,))
-            PHI = delta*np.eye(N).flatten()
-            m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
-            for k in range(1, K+1):
-                PHI += objectiveK(N, k,sizes[k],m[k-1],groups[k-1],invcovs[k-1])
+            PHI = get_phi(m,delta=delta)
 
-            PHI = PHI.reshape((N,N))
             invPHI = np.linalg.pinv(PHI)
 
-            idx = get_nnz_rows_cols(m,groups)
+            idx = get_nnz_rows_cols(m,groups,cumsizes)
             var = np.linalg.inv(PHI[idx])[0,0]
             #var = invPHI[0,0]
 
             grad = -np.concatenate([gradK(k, sizes[k], groups[k-1], invcovs[k-1], invPHI) for k in range(1,K+1)])
 
-            def arr(x):
-                if isinstance(x,float):
-                    return np.array([x])
-                else: return x
-
-            if nohess:
-                return var,grad,None
+            if nohess: return var,grad,None
 
             hess = np.zeros((L,L))
-            ip = invPHI[:,0]
-            for k in range(L):
-                for s in range(k,L):
-                    hess[k,s] = arr(ip[np.array(self.flattened_groups[k])])@(self.flattened_sq_invcovs[k]@invPHI[np.ix_(self.flattened_groups[k],self.flattened_groups[s])]@self.flattened_sq_invcovs[s])@arr(ip[np.array(self.flattened_groups[s])])
 
-            hess += np.triu(hess,1).T
+            for k in range(1,K+1):
+                for q in range(1,K+1):
+                    hess[cumsizes[k-1]:cumsizes[k],:][:,cumsizes[q-1]:cumsizes[q]] = hessKQ(k, q, sizes[k], sizes[q], groups[k-1], groups[q-1], invcovs[k-1], invcovs[q-1], invPHI)
+
+            hess += hess.T
 
             return var,grad,hess
 
-        return variance,variance_with_grad_and_hess
+        self.variance = variance
+        self.variance_with_grad_and_hess = variance_with_grad_and_hess
 
-    def solve(self, budget=None, eps=None, solver="gurobi", integer=False):
+    def solve(self, budget=None, eps=None, solver="cvxpy", integer=False, x0=None):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         if solver not in ["gurobi", "scipy", "cvxpy"]:
@@ -281,25 +321,29 @@ class BLUESampleAllocationProblem(object):
         if eps is None:
             print("Minimizing statistical error for fixed cost...\n")
             if   solver == "gurobi": samples = self.gurobi_solve(budget=budget, integer=integer)
-            elif solver == "cvxpy":  samples = self.cvxpy_solve(budget)
-            elif solver == "scipy":  samples = self.scipy_solve(budget)
+            elif solver == "cvxpy":  samples = self.cvxpy_solve(budget=budget)
+            elif solver == "scipy":  samples = self.scipy_solve(budget=budget, x0=x0)
 
             if not integer:
                 constraint = lambda m : m@self.costs <= budget and m@self.e >= 1
                 objective  = self.variance
                 
+                ss = samples.copy()
                 samples,fval = best_closest_integer_solution(samples, objective, constraint)
+                assert not np.isinf(fval)
                 if np.isinf(fval):
                     print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
                     samples = self.gurobi_solve(budget=budget, integer=True)
 
         else:
             print("Minimizing cost given statistical error tolerance...\n")
-            samples = self.gurobi_solve(eps=eps, integer=integer)
+            if   solver == "gurobi": samples = self.gurobi_solve(eps=eps, integer=integer)
+            elif solver == "scipy":  samples = self.scipy_solve(eps=eps, x0=x0)
+            elif solver == "cvxpy":  samples = self.cvxpy_solve(eps=eps)
 
             if not integer:
-                objective   = lambda m : m@self.costs
-                constraint  = lambda m : m@self.e >= 1 and self.variance(m) <= eps**2
+                objective  = lambda m : m@self.costs
+                constraint = lambda m : m@self.e >= 1 and self.variance(m) <= eps**2
 
                 samples,fval = best_closest_integer_solution(samples, objective, constraint)
 
@@ -390,51 +434,62 @@ class BLUESampleAllocationProblem(object):
 
         return np.array(m.X)
 
-    def cvxpy_solve(self, budget, delta=0.01):
+    def cvxpy_solve(self, budget=None, eps=None, delta=0.0):
         import cvxpy as cp
+
+        if budget is None and eps is None:
+            raise ValueError("Need to specify either budget or RMSE tolerance")
 
         K        = self.K
         L        = self.L
         w        = self.costs
         e        = self.e
         N        = self.N
+        psi      = self.psi
         groups   = self.groups
         invcovs  = self.invcovs
         sizes    = self.sizes
         cumsizes = self.cumsizes
 
-        def objective_cvxpy(m):
-            PHI = delta*np.eye(N).flatten()
-            E = np.zeros((N*N,))
-            for k in range(1, K+1):
-                Lk = sizes[k]
-                mk = m[cumsizes[k-1]:cumsizes[k]]
-                groupsk = groups[k-1]
-                invcovsk = invcovs[k-1]
-                for i in range(Lk):
-                    group = groupsk[i]
-                    for j in range(k):
-                        for l in range(k):
-                            E[N*group[j] + group[l]] = 1.
-                            PHI = PHI + E*(mk[i]*invcovsk[k*k*i + k*j + l])
-                            E[N*group[j] + group[l]] = 0
+        NN = N+1
 
-            PHI = cp.reshape(PHI, (N,N))
-            e = np.zeros((N,)); e[0] = 1
-            out = cp.matrix_frac(e, PHI)
-            return out
+        def cvxpy_fun(m,t,delta=0):
+            PHI = cp.reshape(psi@m + delta*np.eye(N).flatten(), (N,N))
+            ee = np.zeros((N,1)); ee[0] = 1
+            return cp.bmat([[PHI,ee],[ee.T,cp.reshape(t,(1,1))]])
 
         m = cp.Variable(L)
-        obj = cp.Minimize(objective_cvxpy(m))
-        constraints = [m >= 0.1*np.ones((L,)), w@m == budget, m@e >= 1]
+        t = cp.Variable()
+        if budget is not None:
+            obj = cp.Minimize(t)
+            constraints = [m >= 0.0*np.ones((L,)), w@m <= budget, m@e >= 1, cvxpy_fun(m,t,delta=0) >> 0]
+        else:
+            obj = cp.Minimize(w@m)
+            constraints = [m >= 0.0*np.ones((L,)), m@e >= 1, t <= eps**2, cvxpy_fun(m,t,delta=0) >> 0]
         prob = cp.Problem(obj, constraints)
 
-        prob.solve(verbose=True, solver="SCS", eps=1.0e-4)
+
+        ## MOSEK is suboptimal for some reason
+        ## SCS does not converge
+        #mosek_params = {
+        #    "MSK_DPAR_INTPNT_CO_TOL_DFEAS": 1e-10,
+        #    "MSK_DPAR_INTPNT_CO_TOL_PFEAS": 1e-10,
+        #    "MSK_DPAR_INTPNT_CO_TOL_REL_GAP": 1e-15,
+        #    'MSK_DPAR_INTPNT_CO_TOL_MU_RED' : 1.0e-10,
+        #    'MSK_DPAR_INTPNT_CO_TOL_NEAR_REL':1,
+        #    "MSK_IPAR_INTPNT_MAX_ITERATIONS": 100,
+        #}
+
+        #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
+        prob.solve(verbose=True, solver="CVXOPT", abstol=1.0e-8, reltol=1.e-6, max_iters=1000, feastol=1.0e-4, kttsolver='chol',refinement=2)
 
         return m.value
 
-    def scipy_solve(self, budget):
-        from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds,line_search
+    def scipy_solve(self, budget=None, eps=None, x0=None):
+        from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds
+
+        if budget is None and eps is None:
+            raise ValueError("Need to specify either budget or RMSE tolerance")
 
         L = self.L
         w = self.costs
@@ -442,18 +497,20 @@ class BLUESampleAllocationProblem(object):
 
         print("Optimizing using scipy...")
 
-        constraint1 = Bounds(0.1*np.ones((L,)), np.inf*np.ones((L,)), keep_feasible=True)
-        constraint2 = {"type":"eq", "fun" : lambda x : w.dot(x) - budget}
-        constraint3 = {"type":"ineq", "fun" : lambda x : e.dot(x) - 1}
-
-        #constraint1 = LinearConstraint(np.eye(L), 0.0*np.ones((L,)), np.inf*np.ones((L,)), keep_feasible=True)
         constraint1 = Bounds(0.0*np.ones((L,)), np.inf*np.ones((L,)), keep_feasible=True)
-        constraint2 = LinearConstraint(w, -np.inf, budget)
         constraint3 = LinearConstraint(e, 1, np.inf, keep_feasible=True)
+        if budget is not None:
+            constraint2 = LinearConstraint(w, -np.inf, budget)
 
-        x0 = np.ceil(10*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w)
-        res = minimize(lambda x : self.variance_with_grad_and_hess(x,nohess=True,delta=0)[:-1], x0, jac=True, hess=lambda x : self.variance_with_grad_and_hess(x,delta=0)[-1], bounds=constraint1, constraints=[constraint2,constraint3], method="trust-constr", options={"factorization_method" : "SVDFactorization", "disp" : True, "maxiter":200}, tol = 1.0e-8)
-        #res = minimize(lambda x : self.variance_with_grad_and_hess(x)[:1], x0, jac=True, bounds = constraint1, constraints=[constraint2,constraint3], method="SLSQP", options={"ftol" : 1.0e-8, "disp" : True, "maxiter":100000}, tol = 1.0e-8)
+            if x0 is None: x0 = np.ceil(10*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w)
+            res = minimize(lambda x : self.variance_with_grad_and_hess(x,nohess=True,delta=0)[:-1], x0, jac=True, hess=lambda x : self.variance_with_grad_and_hess(x,delta=0)[-1], bounds=constraint1, constraints=[constraint2,constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-8)
+
+        else:
+            epsq = eps**2
+            constraint2 = NonlinearConstraint(lambda x : self.variance(x,delta=0), epsq, epsq, jac = lambda x : self.variance_with_grad_and_hess(x,nohess=True,delta=0)[1], hess=lambda x,p : self.variance_with_grad_and_hess(x,delta=0)[2]*p)
+            if x0 is None: x0 = np.ceil(eps**-2*np.random.rand(L))
+            res = minimize(lambda x : [w@x,w], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=[constraint2,constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":10000, 'verbose':3}, tol = 1.0e-6)
+
 
         return res.x
 
@@ -475,8 +532,8 @@ if __name__ == '__main__':
     problem = BLUESampleAllocationProblem(C, KK, groups, costs)
 
     scipy_sol,cvxpy_sol,gurobi_sol = None,None,None
+    cvxpy_sol  = problem.solve(budget=budget, solver="cvxpy")
     scipy_sol  = problem.solve(budget=budget, solver="scipy")
-    #cvxpy_sol  = problem.solve(budget=budget, solver="cvxpy")
     gurobi_sol = problem.solve(budget=budget, solver="gurobi")
     #gurobi_eps_sol = problem.solve(eps=eps, solver="gurobi")
 
