@@ -4,6 +4,18 @@ from itertools import combinations, product
 
 ########################################################
 
+# MOSEK is suboptimal for some reason
+# SCS does not converge
+mosek_params = {
+    "MSK_DPAR_INTPNT_CO_TOL_DFEAS": 1e-10,
+    "MSK_DPAR_INTPNT_CO_TOL_PFEAS": 1e-10,
+    "MSK_DPAR_INTPNT_CO_TOL_REL_GAP": 1e-15,
+    'MSK_DPAR_INTPNT_CO_TOL_MU_RED' : 1.0e-10,
+    'MSK_DPAR_INTPNT_CO_TOL_NEAR_REL':1,
+    "MSK_IPAR_INTPNT_MAX_ITERATIONS": 100,
+}
+
+
 def attempt_mlmc_setup(v, w, budget=None, eps=None):
     if budget is None and eps is None:
         raise ValueError("Need to specify either budget or RMSE tolerance")
@@ -467,19 +479,7 @@ class BLUESampleAllocationProblem(object):
             obj = cp.Minimize(w@m)
             constraints = [m >= 0.0*np.ones((L,)), m@e >= 1, t <= eps**2, cvxpy_fun(m,t,delta=0) >> 0]
         prob = cp.Problem(obj, constraints)
-
-
-        ## MOSEK is suboptimal for some reason
-        ## SCS does not converge
-        #mosek_params = {
-        #    "MSK_DPAR_INTPNT_CO_TOL_DFEAS": 1e-10,
-        #    "MSK_DPAR_INTPNT_CO_TOL_PFEAS": 1e-10,
-        #    "MSK_DPAR_INTPNT_CO_TOL_REL_GAP": 1e-15,
-        #    'MSK_DPAR_INTPNT_CO_TOL_MU_RED' : 1.0e-10,
-        #    'MSK_DPAR_INTPNT_CO_TOL_NEAR_REL':1,
-        #    "MSK_IPAR_INTPNT_MAX_ITERATIONS": 100,
-        #}
-
+        
         #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
         prob.solve(verbose=True, solver="CVXOPT", abstol=1.0e-8, reltol=1.e-6, max_iters=1000, feastol=1.0e-4, kttsolver='chol',refinement=2)
 

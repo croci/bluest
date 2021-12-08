@@ -41,7 +41,7 @@ class BLUEProblem(object):
         self.M = M
         self.n_outputs = n_outputs
 
-        if C is None: C = np.nan*np.ones((M,M))
+        if C is None: C = [np.nan*np.ones((M,M)) for n in range(n_outputs)]
 
         self.sample_allocation_problem = None
 
@@ -52,22 +52,22 @@ class BLUEProblem(object):
         params["spg_params"] = spg_params
         self.params.update(params)
 
-        self.G = self.get_model_graph(C, costs=costs)
+        self.G = [self.get_model_graph(C[n], costs=costs) for n in range(n_outputs)]
 
         if costs is None: self.estimate_costs()
         self.check_costs(warning=True) # Sending a warning just in case
         
         self.estimate_missing_covariances(self.params["covariance_estimation_samples"])
-        self.project_covariance()
+        self.project_covariances()
 
-        self.check_graph(remove_uncorrelated=self.params["remove_uncorrelated"])
+        self.check_graphs(remove_uncorrelated=self.params["remove_uncorrelated"])
 
         print("BLUE estimator ready.\n")
 
     def check_costs(self, warning=False):
         costs = self.get_costs()
         if costs[0] != costs.max():
-            more_expensive_models = [self.G.nodes[i]["model_number"] for i in costs[costs > costs[0]]]
+            more_expensive_models = [self.G[0].nodes[i]["model_number"] for i in costs[costs > costs[0]]]
             message_error = "Model zero is not the most expensive model. Consider removing the more expensive models %s" % more_expensive_models
             message_warning = "WARNING! Model zero is not the most expensive model and some estimators won't run in this setting. The more expensive models are: %s" % more_expensive_models
             if warning: print(message_warning)
@@ -84,7 +84,7 @@ class BLUEProblem(object):
         raise NotImplementedError
 
     def get_costs(self):
-        return np.array([self.G.nodes[l]['cost'] for l in range(self.M)])
+        return np.array([self.G[0].nodes[l]['cost'] for l in range(self.M)])
 
     def get_group_costs(self, groups):
         model_costs = self.get_costs()
@@ -409,7 +409,11 @@ class BLUEProblem(object):
 
         return G
 
-    def check_graph(self, remove_uncorrelated=False):
+    def check_graphs(self, remove_uncorrelated=False):
+        for n in range(self.n_outputs):
+            self.check_graph(n, remove_uncorrelated=remove_uncorrelated)
+
+    def check_graph(self, n=1, remove_uncorrelated=False):
 
         if remove_uncorrelated:
             for i in range(self.M):
@@ -426,7 +430,13 @@ class BLUEProblem(object):
             self.G = SG
             self.M = SG.number_of_nodes()
 
-    def get_covariance(self):
+    def get_covariances(self):
+        return [self.get_covariance(n) for n in range(self.n_outputs)]
+
+    def get_correlations(self):
+        return [self.get_correlation(n) for n in range(self.n_outputs)]
+
+    def get_covariance(self, n=1):
         '''
             Computes the model covariance matrix
             this is just the model graph adjacency
@@ -434,36 +444,41 @@ class BLUEProblem(object):
             that cannot be coupled), and with infs
             replaced by 0 (uncorrelated models).
         '''
-        C = nx.adjacency_matrix(self.G).toarray()
+        C = nx.adjacency_matrix(self.G[n]).toarray()
         mask0 = C == 0
         maskinf = np.isinf(C)
         C[mask0] = np.nan
         C[maskinf] = 0
         return C
 
-    def get_correlation(self):
-        C = self.get_covariance()
+    def get_correlation(self,n=1):
+        C = self.get_covariance(n)
         s = np.sqrt(np.diag(C))
         return C/np.outer(s,s)
 
     def estimate_missing_covariances(self, N):
         print("Covariance estimation with %d samples..." % N)
-        C = nx.adjacency_matrix(self.G).toarray()
-        ls = list(np.where(np.isnan(np.sum(C,1)))[0])
+        C = [nx.adjacency_matrix(self.G[n]).toarray() for n in range(self.n_outputs)]
+        ls = list(np.where(np.isnan(np.sum(sum(C),1)))[0])
         sumse,sumsc,cost = self.blue_fn(ls, N)
-        C_hat = sumsc/N - np.outer(sumse/N,sumse/N)
-        for i,j,c in self.G.edges(data=True):
-            if np.isnan(c['weight']):
-                if abs(C_hat[i,j]/np.sqrt(C_hat[i,i]*C_hat[j,j])) < 1.0e-7:
-                    C_hat[i,j] = np.inf # mark as uncorrelated
-                self.G[i][j]['weight'] = C_hat[i,j]
+        C_hat = [sumsc[n]/N - np.outer(sumse[n]/N,sumse[n]/N) for n in range(self.n_outputs)]
+        for n in range(self.n_outputs):
+            for i,j,c in self.G[n].edges(data=True):
+                if np.isnan(c['weight']):
+                    if abs(C_hat[n][i,j]/np.sqrt(C_hat[n][i,i]*C_hat[n][j,j])) < 1.0e-7:
+                        C_hat[n][i,j] = np.inf # mark as uncorrelated
+                    self.G[n][i][j]['weight'] = C_hat[n][i,j]
 
-    def project_covariance(self):
+    def project_covariances(self):
+        for n in range(self.n_outputs):
+            self.project_covariance(n)
+
+    def project_covariance(self, n=1):
         
         spg_params = self.params["spg_params"]
 
         # the covariance will have NaNs corresponding to entries that cannot be coupled
-        C = self.get_covariance().flatten()
+        C = self.get_covariance(n).flatten()
         mask = (~np.isnan(C)).astype(int)
         invmask = np.isnan(C).astype(int)
 
@@ -507,12 +522,12 @@ class BLUEProblem(object):
         for i in range(self.M):
             for j in range(self.M):
                 coupled = not np.isnan(C_new[i,j])
-                if self.G.has_edge(i,j):
-                    if coupled: self.G[i][j]['weight'] = C_new[i,j]
-                    else:       self.G[i][j]['weight'] = 0
+                if self.G[n].has_edge(i,j):
+                    if coupled: self.G[n][i][j]['weight'] = C_new[i,j]
+                    else:       self.G[n][i][j]['weight'] = 0
                 elif coupled:
-                    self.G.add_edge(i,j)
-                    self.G[i][j]['weight'] = C_new[i,j]
+                    self.G[n].add_edge(i,j)
+                    self.G[n][i][j]['weight'] = C_new[i,j]
 
     def estimate_costs(self, N=2):
         print("Cost estimation via sampling...")
@@ -521,7 +536,7 @@ class BLUEProblem(object):
             self.G.nodes[l]['cost'] = cost/N
 
     def blue_fn(self, ls, N, verbose=True):
-        return blue_fn(ls, N, self, self.sampler, N1=self.params["sample_batch_size"], verbose=verbose)
+        return blue_fn(ls, N, self, self.sampler, N1=self.params["sample_batch_size"], No=self.n_outputs, verbose=verbose)
 
     def draw_model_graph(self):
         import matplotlib.pyplot as plt
