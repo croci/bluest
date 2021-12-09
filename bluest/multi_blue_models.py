@@ -1,8 +1,9 @@
 import numpy as np
 import networkx as nx
 from itertools import combinations
-from .blue_fn import blue_fn
-from .blue_opt import BLUESampleAllocationProblem,attempt_mlmc_setup,attempt_mfmc_setup
+from .multi_blue_fn import blue_fn
+from .multi_blue_opt import BLUEMultiObjectiveSampleAllocationProblem,attempt_mlmc_setup,attempt_mfmc_setup
+from .layered_network_graph import LayeredNetworkGraph
 from .spg import spg
 
 spg_default_params = {"maxit" : 200,
@@ -21,6 +22,11 @@ default_params = {
                     "sample_batch_size": 1,
                     "spg_params" : spg_default_params,
                     }
+
+def is_subclique(G,nodelist):
+    H = G.subgraph(nodelist)
+    n = len(nodelist)
+    return H.size() == (n*(n-1))//2
 
 # Are any checks on the correlation matrix necessary?
 class BLUEProblem(object):
@@ -43,7 +49,7 @@ class BLUEProblem(object):
 
         if C is None: C = [np.nan*np.ones((M,M)) for n in range(n_outputs)]
 
-        self.sample_allocation_problem = None
+        self.SAP = None
 
         self.default_params = default_params
         self.params = default_params.copy()
@@ -53,6 +59,7 @@ class BLUEProblem(object):
         self.params.update(params)
 
         self.G = [self.get_model_graph(C[n], costs=costs) for n in range(n_outputs)]
+        self.SG = [list(range(M)) for n in range(n_outputs)]
 
         if costs is None: self.estimate_costs()
         self.check_costs(warning=True) # Sending a warning just in case
@@ -64,14 +71,7 @@ class BLUEProblem(object):
 
         print("BLUE estimator ready.\n")
 
-    def check_costs(self, warning=False):
-        costs = self.get_costs()
-        if costs[0] != costs.max():
-            more_expensive_models = [self.G[0].nodes[i]["model_number"] for i in costs[costs > costs[0]]]
-            message_error = "Model zero is not the most expensive model. Consider removing the more expensive models %s" % more_expensive_models
-            message_warning = "WARNING! Model zero is not the most expensive model and some estimators won't run in this setting. The more expensive models are: %s" % more_expensive_models
-            if warning: print(message_warning)
-            else: raise ValueError(message_error)
+    #################### FUNCTIONS TO BE OVERLOADED #######################
 
     #NOTE: N here is the number of samples to be taken per time
     def evaluate(self, ls, samples, N=1):
@@ -83,6 +83,8 @@ class BLUEProblem(object):
         ''' must be implemented by the user'''
         raise NotImplementedError
 
+    #################### UTILITY FUNCTIONS #######################
+
     def get_costs(self):
         return np.array([self.G[0].nodes[l]['cost'] for l in range(self.M)])
 
@@ -91,9 +93,50 @@ class BLUEProblem(object):
         costs = np.array([sum(model_costs[group]) for groupsk in groups for group in groupsk])
         return costs
 
-    def reorder_model_graph_nodes(self, ordering=None):
+    def check_costs(self, warning=False):
+        costs = self.get_costs()
+        if costs[0] != costs.max():
+            more_expensive_models = [self.G[0].nodes[i]["model_number"] for i in costs[costs > costs[0]]]
+            message_error = "Model zero is not the most expensive model. Consider removing the more expensive models %s" % more_expensive_models
+            message_warning = "WARNING! Model zero is not the most expensive model and some estimators won't run in this setting. The more expensive models are: %s" % more_expensive_models
+            if warning: print(message_warning)
+            else: raise ValueError(message_error)
+
+    def get_covariances(self):
+        return [self.get_covariance(n) for n in range(self.n_outputs)]
+
+    def get_correlations(self):
+        return [self.get_correlation(n) for n in range(self.n_outputs)]
+
+    def get_covariance(self, n=1):
+        '''
+            Computes the model covariance matrix
+            this is just the model graph adjacency
+            matrix with 0 replaced by NaNs (models
+            that cannot be coupled), and with infs
+            replaced by 0 (uncorrelated models).
+        '''
+        C = nx.adjacency_matrix(self.G[n]).toarray()
+        mask0 = C == 0
+        maskinf = np.isinf(C)
+        C[mask0] = np.nan
+        C[maskinf] = 0
+        return C
+
+    def get_correlation(self,n=1):
+        C = self.get_covariance(n)
+        s = np.sqrt(np.diag(C))
+        return C/np.outer(s,s)
+
+    #################### GRAPH MANIPULATION #######################
+
+    def reorder_all_graph_nodes(self, ordering=None):
+        for n in range(self.n_outputs):
+            self.reorder_graph_nodes(n, ordering=ordering)
+
+    def reorder_graph_nodes(self, n=1, ordering=None):
         M = self.M
-        G = self.G
+        G = self.G[n]
         H = nx.Graph()
         sorted_nodes = sorted(G.nodes(data=True))
         if ordering is None or (isinstance(ordering, str) and "asc" in ordering):
@@ -105,79 +148,271 @@ class BLUEProblem(object):
             mapping = {i:item for i,item in enumerate(ordering)}
             sorted_nodes = [sorted_nodes[i] for i in ordering]
         else:
-            raise ValueError("ordering must be 'asc', 'desc', 'ascending', 'descending' or an array/list with length equal to the number of nodes.")
+            raise ValueError("ordering must be None, 'asc', 'desc', 'ascending', 'descending' or an array/list with length equal to the number of nodes.")
+
         H.add_nodes_from(sorted_nodes)
         H.add_edges_from(G.edges(data=True))
         H = nx.relabel_nodes(H, mapping)
-        self.G = H
+        self.G[n] = H
 
-    def setup_solver(self, K=3, budget=None, eps=None, groups=None, solver=None, integer=False):
+    def get_model_graph(self, C, costs=None):
+        '''
+           Creates a graph of the models available from
+           their (possibly partial) covariance structure C.
+           Input:
+               C - spd covariance matrix of the models,
+                   NaN entries correspond to values to be
+                   estimated and infinite entries correspond
+                   to models that will not be coupled.
+
+           Output:
+               G - model graph. Its adjacency matrix is almost
+               the model covariance matrix
+        '''
+
+        M = self.M
+
+        maskinf = np.isinf(C)
+        mask0   = C == 0
+        C[mask0] = np.inf
+        C[maskinf] = 0    # if set to zero, then the graph won't have an edge there
+
+        G = nx.from_numpy_matrix(C)
+
+        if costs is not None:
+            for l in range(M):
+                G.nodes[l]['cost'] = costs[l]
+
+        for l in range(M):
+            G.nodes[l]['model_number'] = l
+
+        return G
+
+    def check_graphs(self, remove_uncorrelated=False):
+        for n in range(self.n_outputs):
+            self.check_graph(n, remove_uncorrelated=remove_uncorrelated)
+
+    def check_graph(self, n=1, remove_uncorrelated=False):
+
+        if remove_uncorrelated:
+            for i in range(self.M):
+                for j in range(i,self.M):
+                    if self.G[n].has_edge(i,j) and np.isinf(self.G[n][i][j]["weight"]):
+                        self.G[n].remove_edge(i,j)
+
+        if not nx.is_connected(self.G[n]):
+            comp = nx.node_connected_component(self.G[n], 0)
+            self.SG[n] = comp
+            print("WARNING! Model graph %d is not connected. Connected graph size: %d" % (n,len(comp)))
+            #print("WARNING! Model graph is not connected, pruning disconnected subgraph...")
+            #SG = self.G.subgraph(comp).copy()
+            #SG = nx.convert_node_labels_to_integers(SG)
+            #print("Done. New model graph size is %d." % SG.number_of_nodes())
+            #self.G = SG
+            #self.M = SG.number_of_nodes()
+
+    def draw_model_graph(self, n=1):
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import to_rgba
+        G = self.G[n]
+        rho = self.get_correlation(n)
+        edge_color_pair = [to_rgba("seagreen"), to_rgba("tab:blue")]
+        pos = nx.shell_layout(G)
+        edges = G.edges()
+        nodes = list(G)
+        weights = np.array([abs(rho[u][v]) for u,v in edges]); weights -= min(weights); weights /= max(weights); weights = 4*weights + 1
+        edge_colors = np.array([edge_color_pair[int(rho[u][v] > 0)] for u,v in edges])
+        node_colors = np.array([G.nodes[l]['cost'] for l in nodes]); node_colors = plt.cm.jet(plt.Normalize()(np.log(node_colors)))
+        nx.draw(G, pos=pos, nodelist=nodes, edgelist=edges, width=weights, edge_color=edge_colors, node_color=node_colors)
+        plt.show()
+
+    def draw_multilayer_model_graph(self):
+        #NOTE: can probably modify this so that it looks more like the single graph plot
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import to_rgba
+
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        node_labels = {n : str(n) for n in range(self.M)}
+        LayeredNetworkGraph(self.G, node_labels=node_labels, ax=ax, layout=nx.shell_layout)
+        ax.set_axis_off()
+        plt.show()
+
+    #################### COVARIANCE AND COST ESTIMATORS #######################
+
+    def estimate_missing_covariances(self, N):
+        print("Covariance estimation with %d samples..." % N)
+        C = [nx.adjacency_matrix(self.G[n]).toarray() for n in range(self.n_outputs)]
+        ls = list(np.where(np.isnan(np.sum(sum(C),1)))[0])
+        sumse,sumsc,cost = self.blue_fn(ls, N)
+        C_hat = [sumsc[n]/N - np.outer(sumse[n]/N,sumse[n]/N) for n in range(self.n_outputs)]
+        for n in range(self.n_outputs):
+            for i,j,c in self.G[n].edges(data=True):
+                if np.isnan(c['weight']):
+                    if abs(C_hat[n][i,j]/np.sqrt(C_hat[n][i,i]*C_hat[n][j,j])) < 1.0e-7:
+                        C_hat[n][i,j] = np.inf # mark as uncorrelated
+                    self.G[n][i][j]['weight'] = C_hat[n][i,j]
+
+    def project_covariances(self):
+        for n in range(self.n_outputs):
+            self.project_covariance(n)
+
+    def project_covariance(self, n=1):
+        
+        spg_params = self.params["spg_params"]
+
+        # the covariance will have NaNs corresponding to entries that cannot be coupled
+        C = self.get_covariance(n).flatten()
+        mask = (~np.isnan(C)).astype(int)
+        invmask = np.isnan(C).astype(int)
+
+        # Penalty parameter for regularisation. Probably not needed.
+        gamma = 0.0
+
+        # projection onto SPD matrices
+        def proj(X):
+            l = int(np.sqrt(len(X)).round())
+            X = X.reshape((l,l))
+            l,V = np.linalg.eigh((X + X.T)/2)
+            l[l<0] = 0
+            return (V@np.diag(l)@V.T).flatten()
+
+        def am(C,mask):
+            X = C.copy()
+            X[abs(mask) < 1.0e-14] = 0
+            return X*mask
+
+        def evalf(x):
+            return 0.5*sum(am(x - C, mask**2)**2 + gamma*am(x**2, invmask**2))
+
+        def evalg(x):
+            return am(x - C, mask**2) + gamma*am(x, invmask**2)
+
+        x = proj(am(C,abs(mask) > 1.0e-14))
+        print("Running Spectral Gradient Descent for Covariance projection...")
+        res = spg(evalf, evalg, proj, x, eps=spg_params["eps"], maxit=spg_params["maxit"], maxfc=spg_params["maxfc"], iprint=spg_params["verbose"], lmbda_min=spg_params["lmbda_min"], lmbda_max=spg_params["lmbda_max"], M=spg_params["linesearch_history_length"])
+
+        if res["spginfo"] == 0:
+            print("Covariance projected, projection error: ", res["f"])
+        else:
+            raise RuntimeError("Could not find good enough Covariance projection. Solver info:\n%s" % res)
+
+        C_new = res["x"].reshape((self.M, self.M))
+        s = np.sqrt(np.diag(C_new))
+        rho_new = C_new/np.outer(s,s)
+        C_new[abs(rho_new) < 1.0e-7] = np.inf # mark uncorrelated models
+        C_new[np.isnan(C).reshape((self.M, self.M))] = np.nan # keep uncoupled models uncoupled
+
+        for i in range(self.M):
+            for j in range(self.M):
+                coupled = not np.isnan(C_new[i,j])
+                if self.G[n].has_edge(i,j):
+                    if coupled: self.G[n][i][j]['weight'] = C_new[i,j]
+                    else:       self.G[n][i][j]['weight'] = 0
+                elif coupled:
+                    self.G[n].add_edge(i,j)
+                    self.G[n][i][j]['weight'] = C_new[i,j]
+
+    def estimate_costs(self, N=2):
+        print("Cost estimation via sampling...")
+        for l in range(self.M):
+            _,_,cost = self.blue_fn([l], N, verbose=False)
+            for n in range(self.n_outputs):
+                self.G[n].nodes[l]['cost'] = cost/N
+
+    #################### SOLVERS #######################
+
+    def blue_fn(self, ls, N, verbose=True):
+        return blue_fn(ls, N, self, self.sampler, N1=self.params["sample_batch_size"], No=self.n_outputs, verbose=verbose)
+
+    def setup_solver(self, K=3, budget=None, eps=None, groups=None, multi_groups=None, solver=None, integer=False):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:
             eps = None
         if solver is None:
             solver=self.params["optimization_solver"]
+        if multi_groups is not None and len(multi_groups) != self.M:
+            raise ValueError("multi_groups must be a list of groupings of the same length as the number of models.")
+        if groups is not None and multi_groups is None:
+            multi_groups = [groups for n in range(self.n_outputs)]
 
-        if groups is None:
+        if multi_groups is None:
+            #FIXME: we previously assumed that groups[k] was nonempty for all k<=K.
+            #       This might not hold with multiple outputs.
+            #       Possible solution: providing a list of K to the SAP?
+            Ks = []
+            multi_groups = []
             K = min(K, self.M)
-            flattened_groups = []
-            groups = [[] for k in range(K)]
-            for clique in nx.enumerate_all_cliques(self.G):
-                kn = len(clique)
-                if kn > K: break
-                groups[kn-1].append(clique)
-                flattened_groups.append(clique)
+            for n in range(self.n_outputs):
+                KK = K
+                groups = [[] for k in range(K)]
+                for clique in nx.enumerate_all_cliques(self.G[n]):
+                    kn = len(clique)
+                    if kn > K: break
+                    if all(node in self.SG[n] for node in clique): # filter out the cliques in a non-connected component. See self.check_graph
+                        groups[kn-1].append(clique)
 
-            groups = [item for item in groups if len(item) > 0]
-            K = min(K, len(groups))
+                groups = [item for item in groups if len(item) > 0]
+                KK = min(KK, len(groups))
+                multi_groups.append(groups)
+                Ks.append(KK)
+
+            K = max(Ks)
 
         else:
-            K = len(groups[-1])
-            new_groups = [[] for k in range(K)]
-            flattened_groups = []
-            for group in groups:
-                if is_subclique(self.G, group):
-                    new_groups[len(group)-1].append(group)
-                    flattened_groups.append(group)
+            Ks = [min(max(len(item) for item in groups), self.M) for groups in multi_groups]
+            for n in range(self.n_outputs):
+                groups = multi_groups[n]
+                new_groups = [[] for k in range(Ks[i])]
+                for group in groups:
+                    if is_subclique(self.G[n], group) and all(node in self.SG[n] for node in group):
+                        new_groups[len(group)-1].append(group)
 
-            groups = new_groups
+                multi_groups[n] = new_groups
 
-        C = self.get_covariance() # this has some NaNs, but these should never come up
+            Ks = [min(max(len(item) for item in groups), self.M) for groups in multi_groups]
+            K  = max(Ks)
+
+        C = self.get_covariances() # this has some NaNs, but these should never come up
         costs = self.get_group_costs(groups)
 
         print("Computing optimal sample allocation...")
-        self.sample_allocation_problem = BLUESampleAllocationProblem(C, K, groups, costs)
-        self.sample_allocation_problem.solve(budget=budget, eps=eps, solver=solver, integer=integer)
+        #FIXME do we really need multi_groups? We can use it to make sure no subC is singular so it is useful
+        #      when we actually compute the output estimators after sampling we need to make sure that we ignore the bad groups
+        #      when we combine the samples into the final output estimators
+        self.SAP = BLUEMultiObjectiveSampleAllocationProblem(C, K, Ks, multi_groups, costs)
+        self.SAP.solve(budget=budget, eps=eps, solver=solver, integer=integer) # max function is convex, maybe can still do both formulations?
 
-        var = self.sample_allocation_problem.variance(self.sample_allocation_problem.samples)
-        cost_BLUE = self.sample_allocation_problem.samples@costs
-        N_MC = C[0,0]/var
+        Vs = self.SAP.variances(self.SAP.samples)
+        cost_BLUE = self.SAP.samples@costs
+        N_MC = max(C[n][0,0]/Vs[n] for n in range(self.n_outputs))
         cost_MC = N_MC*costs[0] 
         print("\nBLUE cost: ", cost_BLUE, "MC cost: ", cost_MC, "Savings: ", cost_MC/cost_BLUE)
 
-        which_groups = [self.sample_allocation_problem.flattened_groups[item] for item in np.argwhere(self.sample_allocation_problem.samples > 0).flatten()]
+        # FIXME: flattened groups will be the union between all the possible groups selected above
+        which_groups = [self.SAP.flattened_groups[item] for item in np.argwhere(self.SAP.samples > 0).flatten()]
         print("\nModel groups selected: %s\n" % which_groups)
-        print("BLUE estimator setup. Error: ", np.sqrt(var), " Cost: ", cost_BLUE, "\n")
+        print("BLUE estimator setup. Max error: ", np.sqrt(max(Vs)), " Cost: ", cost_BLUE, "\n")
 
-        blue_data = {"samples" : self.sample_allocation_problem.samples, "error" : np.sqrt(var), "total_cost" : cost_BLUE}
+        blue_data = {"samples" : self.SAP.samples, "error" : np.sqrt(max(Vs)), "total_cost" : cost_BLUE}
 
         return blue_data
 
     def solve(self, K=3, budget=None, eps=None, groups=None, integer=False, solver=None):
         if solver is None: solver = self.params["optimization_solver"]
-        if self.sample_allocation_problem is None:
+        if self.SAP is None:
             self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, integer=integer, solver=solver)
 
-        elif budget is not None and budget != self.sample_allocation_problem.budget or eps is not None and eps != self.sample_allocation_problem.eps:
+        elif budget is not None and budget != self.SAP.budget or eps is not None and eps != self.SAP.eps:
             self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, integer=integer, solver=solver)
-        elif budget is None and eps is None and self.sample_allocation_problem.samples is None:
+        elif budget is None and eps is None and self.SAP.samples is None:
             raise ValueError("Need to prescribe either a budget or an error tolerance to run the BLUE estimator")
 
         print("Sampling BLUE...\n")
 
-        flattened_groups = self.sample_allocation_problem.flattened_groups
-        sample_list      = self.sample_allocation_problem.samples
+        flattened_groups = self.SAP.flattened_groups
+        sample_list      = self.SAP.samples
         
         sums = []
         for ls,N in zip(flattened_groups, sample_list):
@@ -187,9 +422,9 @@ class BLUEProblem(object):
             sumse,_,_ = self.blue_fn(ls, N)
             sums.append(sumse)
 
-        mu,var = self.sample_allocation_problem.compute_BLUE_estimator(sums)
+        mu,var = self.SAP.compute_BLUE_estimator(sums)
         err = np.sqrt(var)
-        tot_cost = self.sample_allocation_problem.tot_cost
+        tot_cost = self.SAP.tot_cost
 
         return mu,err,tot_cost
 
@@ -369,194 +604,12 @@ class BLUEProblem(object):
         for i in range(len(eps)):
             self.setup_solver(K=K, eps=eps[i], solver="cvxpy")
             #self.setup_solver(K=K, eps=eps[i], solver="gurobi", integer=True)
-            tot_cost.append(sum(self.sample_allocation_problem.samples*self.sample_allocation_problem.costs))
+            tot_cost.append(sum(self.SAP.samples*self.SAP.costs))
         tot_cost = np.array(tot_cost)
         rate = np.polyfit(np.arange(len(tot_cost)), np.log2(tot_cost), 1)[0]
         print("Total costs   :", tot_cost)
         print("Estimated rate:", rate)
         return tot_cost, rate
-
-    def get_model_graph(self, C, costs=None):
-        '''
-           Creates a graph of the models available from
-           their (possibly partial) covariance structure C.
-           Input:
-               C - spd covariance matrix of the models,
-                   NaN entries correspond to values to be
-                   estimated and infinite entries correspond
-                   to models that will not be coupled.
-
-           Output:
-               G - model graph. Its adjacency matrix is almost
-               the model covariance matrix
-        '''
-
-        M = self.M
-
-        maskinf = np.isinf(C)
-        mask0   = C == 0
-        C[mask0] = np.inf
-        C[maskinf] = 0    # if set to zero, then the graph won't have an edge there
-
-        G = nx.from_numpy_matrix(C)
-
-        if costs is not None:
-            for l in range(M):
-                G.nodes[l]['cost'] = costs[l]
-
-        for l in range(M):
-            G.nodes[l]['model_number'] = l
-
-        return G
-
-    def check_graphs(self, remove_uncorrelated=False):
-        for n in range(self.n_outputs):
-            self.check_graph(n, remove_uncorrelated=remove_uncorrelated)
-
-    def check_graph(self, n=1, remove_uncorrelated=False):
-
-        if remove_uncorrelated:
-            for i in range(self.M):
-                for j in range(i,self.M):
-                    if self.G.has_edge(i,j) and np.isinf(self.G[i][j]["weight"]):
-                        self.G.remove_edge(i,j)
-
-        if not nx.is_connected(self.G):
-            print("WARNING! Model graph is not connected, pruning disconnected subgraph...")
-            comp = nx.node_connected_component(self.G, 0)
-            SG = self.G.subgraph(comp).copy()
-            SG = nx.convert_node_labels_to_integers(SG)
-            print("Done. New model graph size is %d." % SG.number_of_nodes())
-            self.G = SG
-            self.M = SG.number_of_nodes()
-
-    def get_covariances(self):
-        return [self.get_covariance(n) for n in range(self.n_outputs)]
-
-    def get_correlations(self):
-        return [self.get_correlation(n) for n in range(self.n_outputs)]
-
-    def get_covariance(self, n=1):
-        '''
-            Computes the model covariance matrix
-            this is just the model graph adjacency
-            matrix with 0 replaced by NaNs (models
-            that cannot be coupled), and with infs
-            replaced by 0 (uncorrelated models).
-        '''
-        C = nx.adjacency_matrix(self.G[n]).toarray()
-        mask0 = C == 0
-        maskinf = np.isinf(C)
-        C[mask0] = np.nan
-        C[maskinf] = 0
-        return C
-
-    def get_correlation(self,n=1):
-        C = self.get_covariance(n)
-        s = np.sqrt(np.diag(C))
-        return C/np.outer(s,s)
-
-    def estimate_missing_covariances(self, N):
-        print("Covariance estimation with %d samples..." % N)
-        C = [nx.adjacency_matrix(self.G[n]).toarray() for n in range(self.n_outputs)]
-        ls = list(np.where(np.isnan(np.sum(sum(C),1)))[0])
-        sumse,sumsc,cost = self.blue_fn(ls, N)
-        C_hat = [sumsc[n]/N - np.outer(sumse[n]/N,sumse[n]/N) for n in range(self.n_outputs)]
-        for n in range(self.n_outputs):
-            for i,j,c in self.G[n].edges(data=True):
-                if np.isnan(c['weight']):
-                    if abs(C_hat[n][i,j]/np.sqrt(C_hat[n][i,i]*C_hat[n][j,j])) < 1.0e-7:
-                        C_hat[n][i,j] = np.inf # mark as uncorrelated
-                    self.G[n][i][j]['weight'] = C_hat[n][i,j]
-
-    def project_covariances(self):
-        for n in range(self.n_outputs):
-            self.project_covariance(n)
-
-    def project_covariance(self, n=1):
-        
-        spg_params = self.params["spg_params"]
-
-        # the covariance will have NaNs corresponding to entries that cannot be coupled
-        C = self.get_covariance(n).flatten()
-        mask = (~np.isnan(C)).astype(int)
-        invmask = np.isnan(C).astype(int)
-
-        # Penalty parameter for regularisation. Probably not needed.
-        gamma = 0.0
-
-        # projection onto SPD matrices
-        def proj(X):
-            l = int(np.sqrt(len(X)).round())
-            X = X.reshape((l,l))
-            l,V = np.linalg.eigh((X + X.T)/2)
-            l[l<0] = 0
-            return (V@np.diag(l)@V.T).flatten()
-
-        def am(C,mask):
-            X = C.copy()
-            X[abs(mask) < 1.0e-14] = 0
-            return X*mask
-
-        def evalf(x):
-            return 0.5*sum(am(x - C, mask**2)**2 + gamma*am(x**2, invmask**2))
-
-        def evalg(x):
-            return am(x - C, mask**2) + gamma*am(x, invmask**2)
-
-        x = proj(am(C,abs(mask) > 1.0e-14))
-        print("Running Spectral Gradient Descent for Covariance projection...")
-        res = spg(evalf, evalg, proj, x, eps=spg_params["eps"], maxit=spg_params["maxit"], maxfc=spg_params["maxfc"], iprint=spg_params["verbose"], lmbda_min=spg_params["lmbda_min"], lmbda_max=spg_params["lmbda_max"], M=spg_params["linesearch_history_length"])
-
-        if res["spginfo"] == 0:
-            print("Covariance projected, projection error: ", res["f"])
-        else:
-            raise RuntimeError("Could not find good enough Covariance projection. Solver info:\n%s" % res)
-
-        C_new = res["x"].reshape((self.M, self.M))
-        s = np.sqrt(np.diag(C_new))
-        rho_new = C_new/np.outer(s,s)
-        C_new[abs(rho_new) < 1.0e-7] = np.inf # mark uncorrelated models
-        C_new[np.isnan(C).reshape((self.M, self.M))] = np.nan # keep uncoupled models uncoupled
-
-        for i in range(self.M):
-            for j in range(self.M):
-                coupled = not np.isnan(C_new[i,j])
-                if self.G[n].has_edge(i,j):
-                    if coupled: self.G[n][i][j]['weight'] = C_new[i,j]
-                    else:       self.G[n][i][j]['weight'] = 0
-                elif coupled:
-                    self.G[n].add_edge(i,j)
-                    self.G[n][i][j]['weight'] = C_new[i,j]
-
-    def estimate_costs(self, N=2):
-        print("Cost estimation via sampling...")
-        for l in range(self.M):
-            _,_,cost = self.blue_fn([l], N, verbose=False)
-            self.G.nodes[l]['cost'] = cost/N
-
-    def blue_fn(self, ls, N, verbose=True):
-        return blue_fn(ls, N, self, self.sampler, N1=self.params["sample_batch_size"], No=self.n_outputs, verbose=verbose)
-
-    def draw_model_graph(self):
-        import matplotlib.pyplot as plt
-        from matplotlib.colors import to_rgba
-        G = self.G
-        rho = self.get_correlation()
-        edge_color_pair = [to_rgba("seagreen"), to_rgba("tab:blue")]
-        pos = nx.shell_layout(G)
-        edges = G.edges()
-        nodes = list(G)
-        weights = np.array([abs(rho[u][v]) for u,v in edges]); weights -= min(weights); weights /= max(weights); weights = 4*weights + 1
-        edge_colors = np.array([edge_color_pair[int(rho[u][v] > 0)] for u,v in edges])
-        node_colors = np.array([G.nodes[l]['cost'] for l in nodes]); node_colors = plt.cm.jet(plt.Normalize()(np.log(node_colors)))
-        nx.draw(G, pos=pos, nodelist=nodes, edgelist=edges, width=weights, edge_color=edge_colors, node_color=node_colors)
-        plt.show()
-
-def is_subclique(G,nodelist):
-    H = G.subgraph(nodelist)
-    n = len(nodelist)
-    return H.size() == (n*(n-1))//2
 
 if __name__ == '__main__':
     pass
