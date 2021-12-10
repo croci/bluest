@@ -389,12 +389,8 @@ class BLUEProblem(object):
         multi_costs = [self.group_costs(item) for item in multi_groups]
 
         print("Computing optimal sample allocation...")
-        #FIXME do we really need multi_groups? We can use it to make sure no subC is singular so it is useful
-        #      when we actually compute the output estimators after sampling we need to make sure that we ignore the bad groups
-        #      when we combine the samples into the final output estimators
         self.SAP = BLUEMultiObjectiveSampleAllocationProblem(C, K, Ks, groups, multi_groups, costs, multi_costs)
-        #FIXME: you probably want to allow a vector of eps
-        self.SAP.solve(budget=budget, eps=eps, solver=solver, integer=integer) # max function is convex, maybe can still do both formulations?
+        self.SAP.solve(budget=budget, eps=eps, solver=solver, integer=integer)
 
         Vs = self.SAP.variances(self.SAP.samples)
         cost_BLUE = self.SAP.samples@costs
@@ -411,13 +407,13 @@ class BLUEProblem(object):
 
         return blue_data
 
-    def solve(self, K=3, budget=None, eps=None, groups=None, integer=False, solver=None):
+    def solve(self, K=3, budget=None, eps=None, groups=None, multi_groups=None, integer=False, solver=None):
         if solver is None: solver = self.params["optimization_solver"]
         if self.SAP is None:
-            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, integer=integer, solver=solver)
+            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, multi_groups=multi_groups, integer=integer, solver=solver)
 
         elif budget is not None and budget != self.SAP.budget or eps is not None and eps != self.SAP.eps:
-            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, integer=integer, solver=solver)
+            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, multi_groups=multi_groups, integer=integer, solver=solver)
         elif budget is None and eps is None and self.SAP.samples is None:
             raise ValueError("Need to prescribe either a budget or an error tolerance to run the BLUE estimator")
 
@@ -434,13 +430,20 @@ class BLUEProblem(object):
             sumse,_,_ = self.blue_fn(ls, N)
             sums.append(sumse)
 
-        mu,var = self.SAP.compute_BLUE_estimator(sums)
-        err = np.sqrt(var)
+        mus,Vs = self.SAP.compute_BLUE_estimators(sums)
+        errs = np.sqrt(Vs)
         tot_cost = self.SAP.tot_cost
 
-        return mu,err,tot_cost
+        return mus,errs,tot_cost
 
     def setup_mlmc(self, budget=None, eps=None):
+        out = [self.setup_mlmc_n(n, budget=budget, eps=eps) for n in range(self.n_outputs)]
+        best_groups = [item[0] for item in out]
+        best_data   = [item[1] for item in out]
+        #FIXME
+
+
+    def setup_mlmc_n(self, n, budget=None, eps=None):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:

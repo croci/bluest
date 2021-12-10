@@ -1,8 +1,11 @@
 import numpy as np
 from itertools import combinations, product
-from .blue_opt import BLUESampleAllocationProblem,get_nnz_rows_cols,best_closest_integer_solution, hessKQ, gradK, objectiveK, fastobj, mosek_params
+from .blue_opt import BLUESampleAllocationProblem,best_closest_integer_solution, mosek_params
 
-class BLUEMultiObjectiveSampleAllocationProblem(BLUESampleAllocationProblem):
+import cvxpy as cp
+from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds
+
+class BLUEMultiObjectiveSampleAllocationProblem(object):
     def __init__(self, C, K, Ks, groups, multi_groups, costs, multi_costs):
 
         self.n_outputs = len(C)
@@ -23,156 +26,65 @@ class BLUEMultiObjectiveSampleAllocationProblem(BLUESampleAllocationProblem):
 
         self.SAPS = [BLUESampleAllocationProblem(C[n], Ks[n], multi_groups[n], multi_costs[n]) for n in range(self.n_outputs)]
 
+        self.sizes = [0] + [len(groupsk) for groupsk in groups]
+        self.cumsizes = np.cumsum(self.sizes)
+        self.L = self.cumsizes[-1]
+        self.e = np.array([int(0 in group) for groupsk in groups for group in groupsk])
+
+        mappings = [[[] for k in range(Ks[n])] for n in range(self.n_outputs)]
+        for n in range(self.n_outputs):
+            for k in range(1, Ks[n]+1):
+                groupsk = multi_groups[n][k-1]
+                for i in range(len(groupsk)):
+                    pos = [j for j,item in enumerate(self.groups[k-1]) if groupsk[i] == item]
+                    assert len(pos) == 1
+                    mappings[n][k-1].append(pos[0])
+
+                invcovs[n][k-1]   = np.vstack(invcovs[n][k-1]).flatten()
+                mappings[n][k-1] = np.array(mappings[n][k-1])
+
+            mappings[n] = np.concatenate(mappings[n])
+
+        self.mappings = mappings # m <-> groups, and m[mappings[n]] = m_n <-> multi_groups[n]
+
         self.samples = None
         self.budget = None
         self.eps = None
         self.tot_cost = None
 
-        #NOTE#FIXME: Can essentially just call the functions in the SAPS as long as we slice m correctly. We just need to get the right indices for each groups in multi_groups.
-
-        self.sizes = [0] + [len(groupsk) for groupsk in groups]
-        self.cumsizes = np.cumsum(self.sizes)
-        #FIXME: do we need local versions of these?
-        self.L = self.cumsizes[-1]
-        self.e = np.array([int(0 in group) for groupsk in groups for group in groupsk])
-
-        positions = [[[] for k in range(Ks[n])] for n in range(self.n_outputs)]
-        invcovs   = [[[] for k in range(Ks[n])] for n in range(self.n_outputs)]
-        local_sizes = [[0] + [len(groupsk) for groupsk in groups] for groups in multi_groups]
-        for n in range(self.n_outputs):
-            for k in range(1, Ks[n]+1):
-                groupsk = multi_groups[n][k-1]
-                for i in range(len(groupsk)):
-                    idx = np.array([groupsk[i]])
-                    index = (idx.T, idx)
-                    invcovs[n][k-1].append(np.linalg.inv(C[n][index]))
-                    pos = [j for j,item in enumerate(self.groups[k-1]) if groupsk[i] == item]
-                    assert len(pos) == 1
-                    positions[n][k-1].append(pos[0])
-
-                invcovs[n][k-1]   = np.vstack(invcovs[n][k-1]).flatten()
-                positions[n][k-1] = np.array(positions[n][k-1])
-
-        self.local_sizes      = local_sizes
-        self.invcovs          = invcovs
-        self.positions        = positions
-        self.local_cumsizes   = [np.cumsum(item) for item in local_sizes]
-        self.local_L          = [item[-1] for item in self.local_cumsizes]
-        self.local_e          = [np.array([int(0 in group) for groupsk in multi_groups[n] for group in groupsk]) for n in range(self.n_outputs)]
-
-        self.get_variance_functions()
-
-    def compute_BLUE_estimator(self, sums):
-        C = self.C
-        K = self.K
-        L = self.L
-        N = self.N
-        groups   = self.groups
-        invcovs  = self.invcovs
-        sizes    = self.sizes
-        cumsizes = self.cumsizes
-
-        y = np.zeros((L,))
-        sums = [sums[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
-        for k in range(1, K+1):
-            for i in range(sizes[k]):
-                for j in range(k):
-                    for s in range(k):
-                        y[groups[k-1][i][j]] += invcovs[k-1][k*k*i + k*j + s]*sums[k-1][i][s]
-
-        def PHIinvY0(m, y, delta=0.0):
-            if abs(m).max() < 0.05: return np.inf
-
-            self.get_phi(m,delta=delta)
-
-            idx = get_nnz_rows_cols(m,groups,cumsizes)
-            PHI = PHI[idx]
-            y   = y[idx[0].flatten()]
-
-            assert idx[0].min() == 0 # the model 0 must always be sampled if this triggers something is wrong
-
+    def check_input(self, budget, eps):
+        if budget is None and eps is None:
+            raise ValueError("Need to specify either budget or RMSE tolerance")
+        if eps is not None:
             try:
-                mu = np.linalg.solve(PHI,y)[0]
-                var = np.linalg.solve(PHI, np.eye(len(y), 1).flatten())[0]
-            except np.linalg.LinAlgError:
-                assert False # after the above fix we should never get here
-                pinvPHI = np.linalg.pinv(PHI)
-                mu  = (pinvPHI@y)[0]
-                var = pinvPHI[0,0] 
+                if len(eps) != self.n_outputs:
+                    raise ValueError("eps must be a scalar or an array of tolerances")
+                eps = np.array(eps)
+            except TypeError:
+                eps = np.array([eps for n in range(self.n_outputs)])
+        return budget, eps
+    
+    def variances(self, m, delta=0):
+        No       = self.n_outputs
+        mappings = self.mappings
+        return [self.SAPS[n].variance(m[mappings[n]],delta=delta) for n in range(No)]
 
-            return mu, var
+    def variance_GH(self, m, nohess=False,delta=0):
+        No       = self.n_outputs
+        mappings = self.mappings
 
-        return PHIinvY0(self.samples, y)
+        out = [self.SAPS[n].variance_with_grad_and_hess(m[mappings[n]],nohess=nohess,delta=delta) for n in range(No)]
+        variances = [item[0] for item in out]
+        gradients = [item[1] for item in out]
+        hessians  = [item[2] for item in out]
 
-    def get_variance_functions(self):
-        C = self.C
-        L = self.L
-        K = self.K
-        N = self.N
-        groups   = self.groups
-        invcovs  = self.invcovs
-        sizes    = self.sizes
-        cumsizes = self.cumsizes
+        return variances,gradients,hessians
 
-        self.psi = np.hstack([fastobj(N,k,sizes[k],groups[k-1],invcovs[k-1]) for k in range(1,K+1)])
-
-        def get_phi(m, delta=0.0, option=2):
-            if option == 1:
-                PHI = delta*np.eye(N).flatten()
-                m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
-                for k in range(1, K+1):
-                    PHI += objectiveK(N, k,sizes[k],m[k-1],groups[k-1],invcovs[k-1])
-
-                PHI = PHI.reshape((N,N))
-            else:
-                PHI = delta*np.eye(N) + (self.psi@m).reshape((N,N))
-
-            return PHI
-        
-        self.get_phi = get_phi
-
-        def variance(m, delta=0.0):
-            if abs(m).max() < 0.05: return np.inf
-            PHI = get_phi(m,delta=delta)
-
-            idx = get_nnz_rows_cols(m,groups,cumsizes)
-            PHI = PHI[idx]
-
-            assert idx[0].min() == 0 # the model 0 must always be sampled if this triggers something is wrong
-
-            try: out = np.linalg.solve(PHI,np.eye(len(idx[0]),1).flatten())[0]
-            except np.linalg.LinAlgError:
-                assert False # after the above fix we should never get here
-                out = np.linalg.pinv(PHI)[0,0]
-
-            return out
-
-        def variance_with_grad_and_hess(m, delta=0.0, nohess=False):
-            if abs(m).max() < 0.05: return np.inf, np.inf*np.ones((L,))
-            PHI = get_phi(m,delta=delta)
-
-            invPHI = np.linalg.pinv(PHI)
-
-            idx = get_nnz_rows_cols(m,groups,cumsizes)
-            var = np.linalg.inv(PHI[idx])[0,0]
-            #var = invPHI[0,0]
-
-            grad = -np.concatenate([gradK(k, sizes[k], groups[k-1], invcovs[k-1], invPHI) for k in range(1,K+1)])
-
-            if nohess: return var,grad,None
-
-            hess = np.zeros((L,L))
-
-            for k in range(1,K+1):
-                for q in range(1,K+1):
-                    hess[cumsizes[k-1]:cumsizes[k],:][:,cumsizes[q-1]:cumsizes[q]] = hessKQ(k, q, sizes[k], sizes[q], groups[k-1], groups[q-1], invcovs[k-1], invcovs[q-1], invPHI)
-
-            hess += hess.T
-
-            return var,grad,hess
-
-        self.variance = variance
-        self.variance_with_grad_and_hess = variance_with_grad_and_hess
+    def compute_BLUE_estimators(self, sums):
+        out  = [self.SAPS[n].compute_BLUE_estimator(sums[self.mappings[n]]) for n in range(self.n_outputs)]
+        mus  = np.array([item[0] for item in out])
+        Vars = np.array([item[1] for item in out])
+        return mus,Vars
 
     def solve(self, budget=None, eps=None, solver="cvxpy", integer=False, x0=None):
         if budget is None and eps is None:
@@ -189,7 +101,7 @@ class BLUEMultiObjectiveSampleAllocationProblem(BLUESampleAllocationProblem):
 
             if not integer:
                 constraint = lambda m : m@self.costs <= budget and m@self.e >= 1
-                objective  = self.variance
+                objective  = lambda m : max(self.variances(m))
                 
                 ss = samples.copy()
                 samples,fval = best_closest_integer_solution(samples, objective, constraint)
@@ -206,7 +118,7 @@ class BLUEMultiObjectiveSampleAllocationProblem(BLUESampleAllocationProblem):
 
             if not integer:
                 objective  = lambda m : m@self.costs
-                constraint = lambda m : m@self.e >= 1 and self.variance(m) <= eps**2
+                constraint = lambda m : m@self.e >= 1 and all(np.array(self.variances(m)) <= np.array(eps)**2)
 
                 samples,fval = best_closest_integer_solution(samples, objective, constraint)
 
@@ -225,51 +137,15 @@ class BLUEMultiObjectiveSampleAllocationProblem(BLUESampleAllocationProblem):
         return samples
 
     def gurobi_solve(self, budget=None, eps=None, integer=False):
+        budget, eps = self.check_input(budget, eps)
+
         from gurobipy import Model,GRB
 
-        if budget is None and eps is None:
-            raise ValueError("Need to specify either budget or RMSE tolerance")
-        
-        min_cost = eps is not None
-
-        K        = self.K
         L        = self.L
         N        = self.N
+        No       = self.n_outputs
         w        = self.costs
         e        = self.e
-        groups   = self.groups
-        invcovs  = self.invcovs
-        sizes    = self.sizes
-        cumsizes = self.cumsizes
-
-        delta = 0
-
-        def gurobi_constraint(m,t):
-            ''' ensuring that t = PHI^{-1}[:,0] '''
-            PHI = delta*np.eye(N).flatten()
-            E = np.zeros((N*N,))
-            for k in range(1, K+1):
-                Lk = sizes[k]
-                mk = m[cumsizes[k-1]:cumsizes[k]]
-                groupsk = groups[k-1]
-                invcovsk = invcovs[k-1]
-                for i in range(Lk):
-                    group = groupsk[i]
-                    for j in range(k):
-                        for l in range(k):
-                            E[N*group[j] + group[l]] = 1.
-                            PHI = PHI + E*(mk[i]*invcovsk[k*k*i + k*j + l])
-                            E[N*group[j] + group[l]] = 0
-
-            out = np.zeros((N,))
-            e = np.zeros((N,))
-            for i in range(N):
-                for j in range(N):
-                    e[i] = 1
-                    out = out + e*(PHI[N*i + j]*t[j])
-                    e[i] = 0
-
-            return out
 
         M = Model("BLUE")
         M.params.NonConvex = 2
@@ -277,58 +153,48 @@ class BLUEMultiObjectiveSampleAllocationProblem(BLUESampleAllocationProblem):
         m = M.addMVar(shape=(int(L),), lb=np.zeros((L,)), ub=np.ones((L,))*np.inf,vtype=GRB.CONTINUOUS, name="m")
         if integer: m.vType = GRB.INTEGER
 
-        t = M.addMVar(shape=(N,), vtype=GRB.CONTINUOUS, name="t")
+        t = [M.addMVar(shape=(N,), vtype=GRB.CONTINUOUS, name="t%d" % n) for n in range(No)]
 
-        if min_cost:
+        if eps is not None:
             M.setObjective(m@w, GRB.MINIMIZE)
-            M.addConstr(t[0] <= eps**2, name="variance")
+            M.addConstrs((t[n][0] <= eps[n]**2 for n in range(No)), name="variance")
             M.addConstr(m@e >= 1, name="minimum_samples")
         else:
-            M.setObjective(t[0], GRB.MINIMIZE)
+            tt = M.addVar(vtype=GRB.CONTINUOUS, name="tmax")
+            M.setObjective(tt, GRB.MINIMIZE)
             M.addConstr(m@w <= budget, name="budget")
             M.addConstr(m@e >= 1, name="minimum_samples")
+            M.addConstrs((tt >= t[n][0] for n in range(No)), name="max_constraint")
 
         # enforcing the constraint that PHI^{-1}[:,0] = t
-        constr = gurobi_constraint(m,t)
-        M.addConstr(constr[0] == 1)
-        M.addConstrs((constr[i] == 0 for i in range(1,N)))
+        for n in range(No):
+            constr = gurobi_constraint(m,t[n])
+            M.addConstr(constr[0] == 1)
+            M.addConstrs((constr[i] == 0 for i in range(1,N)))
 
         M.optimize()
 
         return np.array(m.X)
 
     def cvxpy_solve(self, budget=None, eps=None, delta=0.0):
-        import cvxpy as cp
+        budget, eps = self.check_input(budget, eps)
 
-        if budget is None and eps is None:
-            raise ValueError("Need to specify either budget or RMSE tolerance")
-
-        K        = self.K
         L        = self.L
+        No       = self.n_outputs
         w        = self.costs
         e        = self.e
-        N        = self.N
-        psi      = self.psi
-        groups   = self.groups
-        invcovs  = self.invcovs
-        sizes    = self.sizes
-        cumsizes = self.cumsizes
-
-        NN = N+1
-
-        def cvxpy_fun(m,t,delta=0):
-            PHI = cp.reshape(psi@m + delta*np.eye(N).flatten(), (N,N))
-            ee = np.zeros((N,1)); ee[0] = 1
-            return cp.bmat([[PHI,ee],[ee.T,cp.reshape(t,(1,1))]])
+        mappings = self.mappings
 
         m = cp.Variable(L)
-        t = cp.Variable()
+        t = cp.Variable(No)
         if budget is not None:
-            obj = cp.Minimize(t)
-            constraints = [m >= 0.0*np.ones((L,)), w@m <= budget, m@e >= 1, cvxpy_fun(m,t,delta=0) >> 0]
+            obj = cp.Minimize(cp.max(t))
+            constraints = [m >= 0.0*np.ones((L,)), w@m <= budget, m@e >= 1]
+            constraints += [self.SAPS[n].cvxpy_fun(m[mappings[n]],t[n],delta=0) >> 0 for n in range(No)]
         else:
             obj = cp.Minimize(w@m)
-            constraints = [m >= 0.0*np.ones((L,)), m@e >= 1, t <= eps**2, cvxpy_fun(m,t,delta=0) >> 0]
+            constraints = [m >= 0.0*np.ones((L,)), m@e >= 1, t <= eps**2]
+            constraints += [self.SAPS[n].cvxpy_fun(m[mappings[n]],t[n],delta=0) >> 0 for n in range(No)]
         prob = cp.Problem(obj, constraints)
         
         #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
@@ -337,14 +203,21 @@ class BLUEMultiObjectiveSampleAllocationProblem(BLUESampleAllocationProblem):
         return m.value
 
     def scipy_solve(self, budget=None, eps=None, x0=None):
-        from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds
+        budget, eps = self.check_input(budget, eps)
 
-        if budget is None and eps is None:
-            raise ValueError("Need to specify either budget or RMSE tolerance")
+        L        = self.L
+        No       = self.n_outputs
+        w        = self.costs
+        e        = self.e
+        mappings = self.mappings
 
-        L = self.L
-        w = self.costs
-        e = self.e
+        #NOTE: leave this for now, but if you want the max can just do min t where t >= var[n] for all n
+        def variance(m,delta=0):
+            return sum(self.variances(m,delta=delta))
+
+        def variance_GH(m,nohess=False,delta=0):
+            out = self.variance_GH(m,nohess=nohess,delta=delta)
+            return (sum(out[i]) for i in range(3-int(nohess)))
 
         print("Optimizing using scipy...")
 
@@ -354,13 +227,13 @@ class BLUEMultiObjectiveSampleAllocationProblem(BLUESampleAllocationProblem):
             constraint2 = LinearConstraint(w, -np.inf, budget)
 
             if x0 is None: x0 = np.ceil(10*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w)
-            res = minimize(lambda x : self.variance_with_grad_and_hess(x,nohess=True,delta=0)[:-1], x0, jac=True, hess=lambda x : self.variance_with_grad_and_hess(x,delta=0)[-1], bounds=constraint1, constraints=[constraint2,constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-8)
+            res = minimize(lambda x : variance_GH(x,nohess=True,delta=0), x0, jac=True, hess=lambda x : variance_GH(x,delta=0)[-1], bounds=constraint1, constraints=[constraint2,constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-8)
 
         else:
             epsq = eps**2
-            constraint2 = NonlinearConstraint(lambda x : self.variance(x,delta=0), epsq, epsq, jac = lambda x : self.variance_with_grad_and_hess(x,nohess=True,delta=0)[1], hess=lambda x,p : self.variance_with_grad_and_hess(x,delta=0)[2]*p)
+            constraint2 = [NonlinearConstraint(lambda x : self.SAPS[n].variance(x[mappings[n]],delta=0), epsq, epsq, jac = lambda x : self.SAPS[n].variance_with_grad_and_hess(x[mappings[n]],nohess=True,delta=0)[1], hess=lambda x,p : self.SAPS[n].variance_with_grad_and_hess(x[mappings[n]],delta=0)[2]*p) for n in range(No)]
             if x0 is None: x0 = np.ceil(eps**-2*np.random.rand(L))
-            res = minimize(lambda x : [w@x,w], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=[constraint2,constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":10000, 'verbose':3}, tol = 1.0e-6)
+            res = minimize(lambda x : [w@x,w], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=constraint2 + [constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":10000, 'verbose':3}, tol = 1.0e-6)
 
 
         return res.x

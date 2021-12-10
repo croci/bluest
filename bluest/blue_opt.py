@@ -2,6 +2,9 @@ import numpy as np
 from numba import njit,jit
 from itertools import combinations, product
 
+import cvxpy as cp
+from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds
+
 ########################################################
 
 # MOSEK is suboptimal for some reason
@@ -14,7 +17,6 @@ mosek_params = {
     'MSK_DPAR_INTPNT_CO_TOL_NEAR_REL':1,
     "MSK_IPAR_INTPNT_MAX_ITERATIONS": 100,
 }
-
 
 def attempt_mlmc_setup(v, w, budget=None, eps=None):
     if budget is None and eps is None:
@@ -274,8 +276,6 @@ class BLUESampleAllocationProblem(object):
                 PHI = delta*np.eye(N) + (self.psi@m).reshape((N,N))
 
             return PHI
-        
-        self.get_phi = get_phi
 
         def variance(m, delta=0.0):
             if abs(m).max() < 0.05: return np.inf
@@ -317,6 +317,7 @@ class BLUESampleAllocationProblem(object):
 
             return var,grad,hess
 
+        self.get_phi = get_phi
         self.variance = variance
         self.variance_with_grad_and_hess = variance_with_grad_and_hess
 
@@ -370,52 +371,51 @@ class BLUESampleAllocationProblem(object):
 
         return samples
 
+    def gurobi_constraint(self, m,t, delta=0):
+        ''' ensuring that t = PHI^{-1}[:,0] '''
+
+        K        = self.K
+        N        = self.N
+        groups   = self.groups
+        invcovs  = self.invcovs
+        sizes    = self.sizes
+        cumsizes = self.cumsizes
+
+        PHI = delta*np.eye(N).flatten()
+        E = np.zeros((N*N,))
+        for k in range(1, K+1):
+            Lk = sizes[k]
+            mk = m[cumsizes[k-1]:cumsizes[k]]
+            groupsk = groups[k-1]
+            invcovsk = invcovs[k-1]
+            for i in range(Lk):
+                group = groupsk[i]
+                for j in range(k):
+                    for l in range(k):
+                        E[N*group[j] + group[l]] = 1.
+                        PHI = PHI + E*(mk[i]*invcovsk[k*k*i + k*j + l])
+                        E[N*group[j] + group[l]] = 0
+
+        out = np.zeros((N,))
+        e = np.zeros((N,))
+        for i in range(N):
+            for j in range(N):
+                e[i] = 1
+                out = out + e*(PHI[N*i + j]*t[j])
+                e[i] = 0
+
+        return out
+
     def gurobi_solve(self, budget=None, eps=None, integer=False):
         from gurobipy import Model,GRB
 
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         
-        min_cost = eps is not None
-
-        K        = self.K
         L        = self.L
         N        = self.N
         w        = self.costs
         e        = self.e
-        groups   = self.groups
-        invcovs  = self.invcovs
-        sizes    = self.sizes
-        cumsizes = self.cumsizes
-
-        delta = 0
-
-        def gurobi_constraint(m,t):
-            ''' ensuring that t = PHI^{-1}[:,0] '''
-            PHI = delta*np.eye(N).flatten()
-            E = np.zeros((N*N,))
-            for k in range(1, K+1):
-                Lk = sizes[k]
-                mk = m[cumsizes[k-1]:cumsizes[k]]
-                groupsk = groups[k-1]
-                invcovsk = invcovs[k-1]
-                for i in range(Lk):
-                    group = groupsk[i]
-                    for j in range(k):
-                        for l in range(k):
-                            E[N*group[j] + group[l]] = 1.
-                            PHI = PHI + E*(mk[i]*invcovsk[k*k*i + k*j + l])
-                            E[N*group[j] + group[l]] = 0
-
-            out = np.zeros((N,))
-            e = np.zeros((N,))
-            for i in range(N):
-                for j in range(N):
-                    e[i] = 1
-                    out = out + e*(PHI[N*i + j]*t[j])
-                    e[i] = 0
-
-            return out
 
         M = Model("BLUE")
         M.params.NonConvex = 2
@@ -425,7 +425,7 @@ class BLUESampleAllocationProblem(object):
 
         t = M.addMVar(shape=(N,), vtype=GRB.CONTINUOUS, name="t")
 
-        if min_cost:
+        if eps is not None:
             M.setObjective(m@w, GRB.MINIMIZE)
             M.addConstr(t[0] <= eps**2, name="variance")
             M.addConstr(m@e >= 1, name="minimum_samples")
@@ -435,7 +435,7 @@ class BLUESampleAllocationProblem(object):
             M.addConstr(m@e >= 1, name="minimum_samples")
 
         # enforcing the constraint that PHI^{-1}[:,0] = t
-        constr = gurobi_constraint(m,t)
+        constr = self.gurobi_constraint(m,t)
         M.addConstr(constr[0] == 1)
         M.addConstrs((constr[i] == 0 for i in range(1,N)))
 
@@ -443,9 +443,13 @@ class BLUESampleAllocationProblem(object):
 
         return np.array(m.X)
 
-    def cvxpy_solve(self, budget=None, eps=None, delta=0.0):
-        import cvxpy as cp
+    def cvxpy_fun(self, m, t, delta=0):
+        N = self.N
+        PHI = cp.reshape(self.psi@m + delta*np.eye(N).flatten(), (N,N))
+        ee = np.zeros((N,1)); ee[0] = 1
+        return cp.bmat([[PHI,ee],[ee.T,cp.reshape(t,(1,1))]])
 
+    def cvxpy_solve(self, budget=None, eps=None, delta=0.0):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
 
@@ -462,19 +466,14 @@ class BLUESampleAllocationProblem(object):
 
         NN = N+1
 
-        def cvxpy_fun(m,t,delta=0):
-            PHI = cp.reshape(psi@m + delta*np.eye(N).flatten(), (N,N))
-            ee = np.zeros((N,1)); ee[0] = 1
-            return cp.bmat([[PHI,ee],[ee.T,cp.reshape(t,(1,1))]])
-
         m = cp.Variable(L)
         t = cp.Variable()
         if budget is not None:
             obj = cp.Minimize(t)
-            constraints = [m >= 0.0*np.ones((L,)), w@m <= budget, m@e >= 1, cvxpy_fun(m,t,delta=0) >> 0]
+            constraints = [m >= 0.0*np.ones((L,)), w@m <= budget, m@e >= 1, self.cvxpy_fun(m,t,delta=0) >> 0]
         else:
             obj = cp.Minimize(w@m)
-            constraints = [m >= 0.0*np.ones((L,)), m@e >= 1, t <= eps**2, cvxpy_fun(m,t,delta=0) >> 0]
+            constraints = [m >= 0.0*np.ones((L,)), m@e >= 1, t <= eps**2, self.cvxpy_fun(m,t,delta=0) >> 0]
         prob = cp.Problem(obj, constraints)
         
         #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
@@ -483,8 +482,6 @@ class BLUESampleAllocationProblem(object):
         return m.value
 
     def scipy_solve(self, budget=None, eps=None, x0=None):
-        from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds
-
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
 
