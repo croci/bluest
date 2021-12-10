@@ -1,213 +1,64 @@
 import numpy as np
-from numba import njit,jit
 from itertools import combinations, product
+from .blue_opt import BLUESampleAllocationProblem,get_nnz_rows_cols,best_closest_integer_solution, hessKQ, gradK, objectiveK, fastobj, mosek_params
 
-########################################################
+class BLUEMultiObjectiveSampleAllocationProblem(BLUESampleAllocationProblem):
+    def __init__(self, C, K, Ks, groups, multi_groups, costs, multi_costs):
 
-# MOSEK is suboptimal for some reason
-# SCS does not converge
-mosek_params = {
-    "MSK_DPAR_INTPNT_CO_TOL_DFEAS": 1e-10,
-    "MSK_DPAR_INTPNT_CO_TOL_PFEAS": 1e-10,
-    "MSK_DPAR_INTPNT_CO_TOL_REL_GAP": 1e-15,
-    'MSK_DPAR_INTPNT_CO_TOL_MU_RED' : 1.0e-10,
-    'MSK_DPAR_INTPNT_CO_TOL_NEAR_REL':1,
-    "MSK_IPAR_INTPNT_MAX_ITERATIONS": 100,
-}
-
-
-def attempt_mlmc_setup(v, w, budget=None, eps=None):
-    if budget is None and eps is None:
-        raise ValueError("Need to specify either budget or RMSE tolerance")
-    elif budget is not None and eps is not None:
-        eps = None
-
-    if not all(np.isfinite(v)): return False,None
-
-    q = sum(np.sqrt(v*w))
-    if budget is not None: mu = budget/q
-    else:                  mu = q/eps**2
-    m = mu*np.sqrt(v/w)
-
-    variance = lambda m : sum(v/m)
-    if budget is not None: constraint = lambda m : m@w <= budget and all(m >= 1)
-    else:                  constraint = lambda m : variance(m) <= eps**2 and all(m >= 1)
-
-    m,var = best_closest_integer_solution(m, variance, constraint)
-    if np.isinf(var): return False,None
-
-    err = np.sqrt(var)
-    tot_cost = m@w
-
-    mlmc_data = {"samples" : m, "error" : err, "total_cost" : tot_cost}
-
-    return True,mlmc_data
-
-def attempt_mfmc_setup(sigmas, rhos, costs, budget=None, eps=None):
-    if budget is None and eps is None:
-        raise ValueError("Need to specify either budget or RMSE tolerance")
-    elif budget is not None and eps is not None:
-        eps = None
-
-    if not all(np.isfinite(sigmas)): return False,None
-
-    idx = np.argsort(abs(rhos))[::-1]
-    assert idx[0] == 0
-
-    s = sigmas[idx]
-    rho = np.concatenate([rhos[idx], [0]])
-    w = costs[idx]
-    cost_ratio = w[:-1]/w[1:]
-    rho_ratio = (rho[:-2]**2 - rho[1:-1]**2)/(rho[1:-1]**2 - rho[2:]**2)
-
-    feasible = all(cost_ratio > rho_ratio)
-    if not feasible: return feasible,None
-
-    alphas = rho[1:-1]*s[0]/s[1:]
-
-    r = np.sqrt(w[0]/w*(rho[:-1]**2 - rho[1:]**2)/(1-rho[1]**2))
-    if budget is not None: m1 = budget/(w@r)
-    else:                  m1 = eps**-2*(w@r)*(s[0]**2/w[0])*(1-rho[1]**2)
-    m = np.concatenate([[m1], m1*r[1:]])
-
-    variance = lambda m : s[0]**2/m[0] + sum((1/m[:-1]-1/m[1:])*(alphas**2*s[1:]**2 - 2*alphas*rho[1:-1]*s[0]*s[1:]))
-    if budget is not None: constraint = lambda m : m@w <= budget and m[0] >= 1 and all(m[:-1] <= m[1:])
-    else:                  constraint = lambda m : variance(m) <= eps**2 and m[0] >= 1 and all(m[:-1] <= m[1:])
-
-    m,var = best_closest_integer_solution(m, variance, constraint)
-    if np.isinf(var): return False,None
-
-    err = np.sqrt(var)
-    tot_cost = m@w
-
-    mfmc_data = {"samples" : m, "error" : err, "total_cost" : tot_cost, "alphas" : alphas}
-
-    return feasible,mfmc_data
-
-def get_nnz_rows_cols(m,groups,cumsizes):
-    K = len(cumsizes)-1
-    m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
-    out = np.unique(np.concatenate([groups[k][abs(m[k]) > 1.0e-6].flatten() for k in range(K)]))
-    return out.reshape((len(out),1)), out.reshape((1,len(out)))
-
-def best_closest_integer_solution(sol, obj, constr):
-    L = len(sol)
-    ss = np.round(sol).astype(int)
-    idx = np.argwhere(ss > 0).flatten()
-    LL = len(idx)
-
-    lb = np.zeros((L,)); ub = np.zeros((L,))
-    lb[idx] = np.floor(sol).astype(int)[idx]
-    ub[idx] = np.ceil(sol).astype(int)[idx]
-    bnds = np.vstack([lb,ub])
-
-    best_val  = sol.copy()
-    best_fval = np.inf
-    for item in product([0,1], repeat=LL):
-        val = ss.copy()
-        val[idx] = bnds[item, idx]
-        constraint_satisfied = constr(val)
-        if constraint_satisfied:
-            fval = obj(val)
-            if fval < best_fval:
-                best_fval = fval
-                best_val = val.copy()
-                if LL > 15:
-                    return best_val.astype(int), best_fval
-
-    return best_val.astype(int), best_fval
-
-@njit(fastmath=True)
-def hessKQ(k, q, Lk, Lq, groupsk, groupsq, invcovsk, invcovsq, invPHI):
-    hess = np.zeros((Lk,Lq))
-    ip = invPHI[:,0]
-    ksq = k*k; qsq = q*q
-    for ik in range(Lk):
-        ipk = ip[groupsk[ik]]
-        for iq in range(Lq):
-            ipq = ip[groupsq[iq]]
-            iP = invPHI[groupsk[ik],:][:,groupsq[iq]]
-            #ipk@icovk@invPHI@icovq@ipq + the simmetric
-            #ipk_m Ck_ms*(sum_j iP_sj*(sumi_l Cq_jl*ipq_l)_j)_s
-            for lk in range(k):
-                for jk in range(k):
-                    for jq in range(q):
-                        for lq in range(q):
-                            hess[ik,iq] += ipk[lk]*invcovsk[ksq*ik + k*lk + jk]*iP[jk,jq]*invcovsq[qsq*iq + q*jq + lq]*ipq[lq]
-
-    return hess
-
-@njit(fastmath=True)
-def gradK(k, Lk,groupsk,invcovsk,invPHI):
-    grad = np.zeros((Lk,))
-    for i in range(Lk):
-        temp = invPHI[groupsk[i],0] # PHI is symmetric
-        for j in range(k):
-            for l in range(k):
-                grad[i] += temp[j]*invcovsk[k*k*i + k*j + l]*temp[l]
-
-    return grad
-
-@njit(fastmath=True)
-def objectiveK(N, k,Lk,mk,groupsk,invcovsk):
-    PHI = np.zeros((N*N,))
-    for i in range(Lk):
-        group = groupsk[i]
-        for j in range(k):
-            for l in range(k):
-                PHI[N*group[j]+group[l]] += mk[i]*invcovsk[k*k*i + k*j + l]
-
-    return PHI
-
-@njit(fastmath=True)
-def fastobj(N,k,Lk,groupsk,invcovsk):
-    psi = np.zeros((N*N,Lk))
-    for i in range(Lk):
-        group = groupsk[i]
-        for j in range(k):
-            for l in range(k):
-                psi[N*group[j]+group[l], i] += invcovsk[k*k*i + k*j + l]
-    return psi
-
-########################################################
-
-class BLUESampleAllocationProblem(object):
-    def __init__(self, C, K, groups, costs):
-
+        self.n_outputs = len(C)
         self.C = C
-        self.N = C.shape[0]
+        self.N = C[0].shape[0]
         self.K = K
+        self.Ks = Ks
         self.costs = costs
+        self.multi_groups = multi_groups
+        self.multi_costs = multi_costs
+        flattened_groups = []
+        for k in range(K):
+            flattened_groups += groups[k]
+            groups[k] = np.array(groups[k])
+
+        self.flattened_groups = flattened_groups
+        self.groups = groups
+
+        self.SAPS = [BLUESampleAllocationProblem(C[n], Ks[n], multi_groups[n], multi_costs[n]) for n in range(self.n_outputs)]
+
         self.samples = None
         self.budget = None
         self.eps = None
         self.tot_cost = None
 
-        flattened_groups = []
-        flattened_sq_invcovs = []
-        invcovs = [[] for k in range(K)]
-        sizes = [0] + [len(groupsk) for groupsk in groups]
-        for k in range(1, K+1):
-            groupsk = groups[k-1]
-            for i in range(len(groupsk)):
-                idx = np.array([groupsk[i]])
-                index = (idx.T, idx)
-                invcovs[k-1].append(np.linalg.inv(C[index]))
-                flattened_sq_invcovs.append(invcovs[k-1][-1])
-                flattened_groups.append(groupsk[i])
+        #NOTE#FIXME: Can essentially just call the functions in the SAPS as long as we slice m correctly. We just need to get the right indices for each groups in multi_groups.
 
-            groups[k-1] = np.array(groups[k-1])
-            invcovs[k-1] = np.vstack(invcovs[k-1]).flatten()
-
-        self.sizes            = sizes
-        self.groups           = groups
-        self.flattened_groups = flattened_groups
-        self.flattened_sq_invcovs = flattened_sq_invcovs
-        self.invcovs          = invcovs
-        self.cumsizes         = np.cumsum(sizes)
-        self.L                = self.cumsizes[-1]
-
+        self.sizes = [0] + [len(groupsk) for groupsk in groups]
+        self.cumsizes = np.cumsum(self.sizes)
+        #FIXME: do we need local versions of these?
+        self.L = self.cumsizes[-1]
         self.e = np.array([int(0 in group) for groupsk in groups for group in groupsk])
+
+        positions = [[[] for k in range(Ks[n])] for n in range(self.n_outputs)]
+        invcovs   = [[[] for k in range(Ks[n])] for n in range(self.n_outputs)]
+        local_sizes = [[0] + [len(groupsk) for groupsk in groups] for groups in multi_groups]
+        for n in range(self.n_outputs):
+            for k in range(1, Ks[n]+1):
+                groupsk = multi_groups[n][k-1]
+                for i in range(len(groupsk)):
+                    idx = np.array([groupsk[i]])
+                    index = (idx.T, idx)
+                    invcovs[n][k-1].append(np.linalg.inv(C[n][index]))
+                    pos = [j for j,item in enumerate(self.groups[k-1]) if groupsk[i] == item]
+                    assert len(pos) == 1
+                    positions[n][k-1].append(pos[0])
+
+                invcovs[n][k-1]   = np.vstack(invcovs[n][k-1]).flatten()
+                positions[n][k-1] = np.array(positions[n][k-1])
+
+        self.local_sizes      = local_sizes
+        self.invcovs          = invcovs
+        self.positions        = positions
+        self.local_cumsizes   = [np.cumsum(item) for item in local_sizes]
+        self.local_L          = [item[-1] for item in self.local_cumsizes]
+        self.local_e          = [np.array([int(0 in group) for groupsk in multi_groups[n] for group in groupsk]) for n in range(self.n_outputs)]
 
         self.get_variance_functions()
 

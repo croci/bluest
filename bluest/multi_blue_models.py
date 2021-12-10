@@ -3,6 +3,7 @@ import networkx as nx
 from itertools import combinations
 from .multi_blue_fn import blue_fn
 from .multi_blue_opt import BLUEMultiObjectiveSampleAllocationProblem,attempt_mlmc_setup,attempt_mfmc_setup
+from .blue_opt import attempt_mlmc_setup,attempt_mfmc_setup
 from .layered_network_graph import LayeredNetworkGraph
 from .spg import spg
 
@@ -374,14 +375,25 @@ class BLUEProblem(object):
             Ks = [min(max(len(item) for item in groups), self.M) for groups in multi_groups]
             K  = max(Ks)
 
+        groups = [[] for k in range(K)]
+        for n in range(self.n_outputs):
+            for k in range(Ks[n]):
+                if multi_groups[n][k] not in groups:
+                    groups[k].append(multi_groups[n][k])
+
+        for k in range(K):
+            groups[k].sort()
+
         C = self.get_covariances() # this has some NaNs, but these should never come up
         costs = self.get_group_costs(groups)
+        multi_costs = [self.group_costs(item) for item in multi_groups]
 
         print("Computing optimal sample allocation...")
         #FIXME do we really need multi_groups? We can use it to make sure no subC is singular so it is useful
         #      when we actually compute the output estimators after sampling we need to make sure that we ignore the bad groups
         #      when we combine the samples into the final output estimators
-        self.SAP = BLUEMultiObjectiveSampleAllocationProblem(C, K, Ks, multi_groups, costs)
+        self.SAP = BLUEMultiObjectiveSampleAllocationProblem(C, K, Ks, groups, multi_groups, costs, multi_costs)
+        #FIXME: you probably want to allow a vector of eps
         self.SAP.solve(budget=budget, eps=eps, solver=solver, integer=integer) # max function is convex, maybe can still do both formulations?
 
         Vs = self.SAP.variances(self.SAP.samples)

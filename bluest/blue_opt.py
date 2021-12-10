@@ -184,7 +184,6 @@ class BLUESampleAllocationProblem(object):
         self.tot_cost = None
 
         flattened_groups = []
-        flattened_sq_invcovs = []
         invcovs = [[] for k in range(K)]
         sizes = [0] + [len(groupsk) for groupsk in groups]
         for k in range(1, K+1):
@@ -193,7 +192,6 @@ class BLUESampleAllocationProblem(object):
                 idx = np.array([groupsk[i]])
                 index = (idx.T, idx)
                 invcovs[k-1].append(np.linalg.inv(C[index]))
-                flattened_sq_invcovs.append(invcovs[k-1][-1])
                 flattened_groups.append(groupsk[i])
 
             groups[k-1] = np.array(groups[k-1])
@@ -202,7 +200,6 @@ class BLUESampleAllocationProblem(object):
         self.sizes            = sizes
         self.groups           = groups
         self.flattened_groups = flattened_groups
-        self.flattened_sq_invcovs = flattened_sq_invcovs
         self.invcovs          = invcovs
         self.cumsizes         = np.cumsum(sizes)
         self.L                = self.cumsizes[-1]
