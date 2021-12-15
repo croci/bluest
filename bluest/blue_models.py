@@ -235,11 +235,11 @@ class BLUEProblem(object):
             else: v = subC[0]
             feasible, mlmc_data = attempt_mlmc_setup(v, subw, budget=budget, eps=eps)
             if not feasible: continue
-            if mlmc_data["error"] < min_err:
+            if budget is not None and mlmc_data["error"] < min_err:
                 min_err = mlmc_data["error"]
                 best_group = group
                 best_data.update(mlmc_data)
-            if mlmc_data["total_cost"] < min_cost:
+            if eps is not None and mlmc_data["total_cost"] < min_cost:
                 min_cost = mlmc_data["total_cost"]
                 best_group = group
                 best_data.update(mlmc_data)

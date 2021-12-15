@@ -100,7 +100,7 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
             elif solver == "scipy":  samples = self.scipy_solve(budget=budget, x0=x0)
 
             if not integer:
-                constraint = lambda m : m@self.costs <= budget and m@self.e >= 1
+                constraint = lambda m : m@self.costs <= 1.0001*budget and m@self.e >= 1
                 objective  = lambda m : max(self.variances(m))
                 
                 ss = samples.copy()
@@ -118,7 +118,7 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
 
             if not integer:
                 objective  = lambda m : m@self.costs
-                constraint = lambda m : m@self.e >= 1 and all(np.array(self.variances(m)) <= np.array(eps)**2)
+                constraint = lambda m : m@self.e >= 1 and all(np.array(self.variances(m)) <= 1.0001*np.array(eps)**2)
 
                 samples,fval = best_closest_integer_solution(samples, objective, constraint)
 
@@ -185,20 +185,24 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
         e        = self.e
         mappings = self.mappings
 
-        m = cp.Variable(L)
-        t = cp.Variable(No)
+        m = cp.Variable(L, nonneg=True)
+        t = cp.Variable(No, nonneg=True)
         if budget is not None:
             obj = cp.Minimize(cp.max(t))
-            constraints = [m >= 0.0*np.ones((L,)), w@m <= budget, m@e >= 1]
+            constraints = [w@m <= 1]
             constraints += [self.SAPS[n].cvxpy_fun(m[mappings[n]],t[n],delta=0) >> 0 for n in range(No)]
         else:
-            obj = cp.Minimize(w@m)
-            constraints = [m >= 0.0*np.ones((L,)), m@e >= 1, t <= eps**2]
+            obj = cp.Minimize((w/np.linalg.norm(w))@m)
+            scale = np.linalg.norm(eps**2)
+            constraints = [t <= eps**2/scale]
             constraints += [self.SAPS[n].cvxpy_fun(m[mappings[n]],t[n],delta=0) >> 0 for n in range(No)]
         prob = cp.Problem(obj, constraints)
         
         #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
-        prob.solve(verbose=True, solver="CVXOPT", abstol=1.0e-8, reltol=1.e-6, max_iters=1000, feastol=1.0e-4, kttsolver='chol',refinement=2)
+        prob.solve(verbose=True, solver="CVXOPT", abstol=1.0e-15, reltol=1.e-6, max_iters=1000, feastol=1.0e-5, kttsolver='chol',refinement=2)
+
+        if eps is not None: m.value /= scale
+        else:               m.value *= budget
 
         return m.value
 
@@ -233,7 +237,7 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
             epsq = eps**2
             constraint2 = [NonlinearConstraint(lambda x : self.SAPS[n].variance(x[mappings[n]],delta=0), epsq, epsq, jac = lambda x : self.SAPS[n].variance_with_grad_and_hess(x[mappings[n]],nohess=True,delta=0)[1], hess=lambda x,p : self.SAPS[n].variance_with_grad_and_hess(x[mappings[n]],delta=0)[2]*p) for n in range(No)]
             if x0 is None: x0 = np.ceil(eps**-2*np.random.rand(L))
-            res = minimize(lambda x : [w@x,w], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=constraint2 + [constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":10000, 'verbose':3}, tol = 1.0e-6)
+            res = minimize(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=constraint2 + [constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":10000, 'verbose':3}, tol = 1.0e-6)
 
 
         return res.x
