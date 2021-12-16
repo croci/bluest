@@ -36,11 +36,10 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
             for k in range(1, Ks[n]+1):
                 groupsk = multi_groups[n][k-1]
                 for i in range(len(groupsk)):
-                    pos = [j for j,item in enumerate(self.groups[k-1]) if groupsk[i] == item]
+                    pos = [self.cumsizes[k-1] + j for j,item in enumerate(self.groups[k-1]) if all(groupsk[i] == item)]
                     assert len(pos) == 1
                     mappings[n][k-1].append(pos[0])
 
-                invcovs[n][k-1]   = np.vstack(invcovs[n][k-1]).flatten()
                 mappings[n][k-1] = np.array(mappings[n][k-1])
 
             mappings[n] = np.concatenate(mappings[n])
@@ -80,8 +79,14 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
 
         return variances,gradients,hessians
 
-    def compute_BLUE_estimators(self, sums):
-        out  = [self.SAPS[n].compute_BLUE_estimator(sums[self.mappings[n]]) for n in range(self.n_outputs)]
+    def compute_BLUE_estimators(self, sums, samples):
+        out = []
+        for n in range(self.n_outputs):
+            sums_n = [sums[n][item] for item in self.mappings[n]]
+            out.append(self.SAPS[n].compute_BLUE_estimator(sums_n, samples=samples[self.mappings[n]]))
+
+        #sums_list = [[sums[item] for item in self.mappings[n]] for n in range(self.n_outputs)]
+        #out  = [self.SAPS[n].compute_BLUE_estimator(sums[self.mappings[n]]) for n in range(self.n_outputs)]
         mus  = np.array([item[0] for item in out])
         Vars = np.array([item[1] for item in out])
         return mus,Vars
@@ -100,12 +105,10 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
             elif solver == "scipy":  samples = self.scipy_solve(budget=budget, x0=x0)
 
             if not integer:
-                constraint = lambda m : m@self.costs <= 1.0001*budget and m@self.e >= 1
+                constraint = lambda m : m@self.costs <= 1.001*budget and m@self.e >= 1
                 objective  = lambda m : max(self.variances(m))
                 
-                ss = samples.copy()
-                samples,fval = best_closest_integer_solution(samples, objective, constraint)
-                assert not np.isinf(fval)
+                samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N)
                 if np.isinf(fval):
                     print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
                     samples = self.gurobi_solve(budget=budget, integer=True)
@@ -118,9 +121,9 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
 
             if not integer:
                 objective  = lambda m : m@self.costs
-                constraint = lambda m : m@self.e >= 1 and all(np.array(self.variances(m)) <= 1.0001*np.array(eps)**2)
+                constraint = lambda m : m@self.e >= 1 and all(np.array(self.variances(m)) <= 1.001*np.array(eps)**2)
 
-                samples,fval = best_closest_integer_solution(samples, objective, constraint)
+                samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N)
 
                 if np.isinf(fval):
                     print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
@@ -133,6 +136,8 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
         self.budget = budget
         self.eps = eps
         self.tot_cost = samples@self.costs
+        for n in range(self.n_outputs):
+            self.SAPS[n].samples = samples[self.mappings[n]]
 
         return samples
 
@@ -168,7 +173,7 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
 
         # enforcing the constraint that PHI^{-1}[:,0] = t
         for n in range(No):
-            constr = gurobi_constraint(m,t[n])
+            constr = self.SAPS[n].gurobi_constraint(m,t[n])
             M.addConstr(constr[0] == 1)
             M.addConstrs((constr[i] == 0 for i in range(1,N)))
 
@@ -189,17 +194,17 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
         t = cp.Variable(No, nonneg=True)
         if budget is not None:
             obj = cp.Minimize(cp.max(t))
-            constraints = [w@m <= 1]
+            constraints = [w@m <= 1, m@self.e >= 1/budget]
             constraints += [self.SAPS[n].cvxpy_fun(m[mappings[n]],t[n],delta=0) >> 0 for n in range(No)]
         else:
             obj = cp.Minimize((w/np.linalg.norm(w))@m)
             scale = np.linalg.norm(eps**2)
-            constraints = [t <= eps**2/scale]
+            constraints = [t <= eps**2/scale, m@self.e >= scale]
             constraints += [self.SAPS[n].cvxpy_fun(m[mappings[n]],t[n],delta=0) >> 0 for n in range(No)]
         prob = cp.Problem(obj, constraints)
         
         #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
-        prob.solve(verbose=True, solver="CVXOPT", abstol=1.0e-15, reltol=1.e-6, max_iters=1000, feastol=1.0e-5, kttsolver='chol',refinement=2)
+        prob.solve(verbose=True, solver="CVXOPT", abstol=1.0e-12, reltol=1.e-5, max_iters=1000, feastol=1.0e-5, kttsolver='chol',refinement=2)
 
         if eps is not None: m.value /= scale
         else:               m.value *= budget

@@ -6,3 +6,4 @@ __email__      = 'matteo.croci@austin.utexas.edu'
 
 from .blue_fn import blue_fn
 from .blue_models import BLUEProblem
+from .multi_blue_models import MultiBLUEProblem

@@ -43,7 +43,7 @@ class BLUEProblem(object):
 
         if C is None: C = np.nan*np.ones((M,M))
 
-        self.sample_allocation_problem = None
+        self.SAP = None
 
         self.default_params = default_params
         self.params = default_params.copy()
@@ -147,37 +147,37 @@ class BLUEProblem(object):
         costs = self.get_group_costs(groups)
 
         print("Computing optimal sample allocation...")
-        self.sample_allocation_problem = BLUESampleAllocationProblem(C, K, groups, costs)
-        self.sample_allocation_problem.solve(budget=budget, eps=eps, solver=solver, integer=integer)
+        self.SAP = BLUESampleAllocationProblem(C, K, groups, costs)
+        self.SAP.solve(budget=budget, eps=eps, solver=solver, integer=integer)
 
-        var = self.sample_allocation_problem.variance(self.sample_allocation_problem.samples)
-        cost_BLUE = self.sample_allocation_problem.samples@costs
+        var = self.SAP.variance(self.SAP.samples)
+        cost_BLUE = self.SAP.samples@costs
         N_MC = C[0,0]/var
         cost_MC = N_MC*costs[0] 
         print("\nBLUE cost: ", cost_BLUE, "MC cost: ", cost_MC, "Savings: ", cost_MC/cost_BLUE)
 
-        which_groups = [self.sample_allocation_problem.flattened_groups[item] for item in np.argwhere(self.sample_allocation_problem.samples > 0).flatten()]
+        which_groups = [self.SAP.flattened_groups[item] for item in np.argwhere(self.SAP.samples > 0).flatten()]
         print("\nModel groups selected: %s\n" % which_groups)
         print("BLUE estimator setup. Error: ", np.sqrt(var), " Cost: ", cost_BLUE, "\n")
 
-        blue_data = {"samples" : self.sample_allocation_problem.samples, "error" : np.sqrt(var), "total_cost" : cost_BLUE}
+        blue_data = {"samples" : self.SAP.samples, "error" : np.sqrt(var), "total_cost" : cost_BLUE}
 
         return blue_data
 
     def solve(self, K=3, budget=None, eps=None, groups=None, integer=False, solver=None):
         if solver is None: solver = self.params["optimization_solver"]
-        if self.sample_allocation_problem is None:
+        if self.SAP is None:
             self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, integer=integer, solver=solver)
 
-        elif budget is not None and budget != self.sample_allocation_problem.budget or eps is not None and eps != self.sample_allocation_problem.eps:
+        elif budget is not None and budget != self.SAP.budget or eps is not None and eps != self.SAP.eps:
             self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, integer=integer, solver=solver)
-        elif budget is None and eps is None and self.sample_allocation_problem.samples is None:
+        elif budget is None and eps is None and self.SAP.samples is None:
             raise ValueError("Need to prescribe either a budget or an error tolerance to run the BLUE estimator")
 
         print("Sampling BLUE...\n")
 
-        flattened_groups = self.sample_allocation_problem.flattened_groups
-        sample_list      = self.sample_allocation_problem.samples
+        flattened_groups = self.SAP.flattened_groups
+        sample_list      = self.SAP.samples
         
         sums = []
         for ls,N in zip(flattened_groups, sample_list):
@@ -187,9 +187,9 @@ class BLUEProblem(object):
             sumse,_,_ = self.blue_fn(ls, N)
             sums.append(sumse)
 
-        mu,var = self.sample_allocation_problem.compute_BLUE_estimator(sums)
+        mu,var = self.SAP.compute_BLUE_estimator(sums)
         err = np.sqrt(var)
-        tot_cost = self.sample_allocation_problem.tot_cost
+        tot_cost = self.SAP.tot_cost
 
         return mu,err,tot_cost
 
@@ -369,7 +369,7 @@ class BLUEProblem(object):
         for i in range(len(eps)):
             self.setup_solver(K=K, eps=eps[i], solver="cvxpy")
             #self.setup_solver(K=K, eps=eps[i], solver="gurobi", integer=True)
-            tot_cost.append(sum(self.sample_allocation_problem.samples*self.sample_allocation_problem.costs))
+            tot_cost.append(sum(self.SAP.samples*self.SAP.costs))
         tot_cost = np.array(tot_cost)
         rate = np.polyfit(np.arange(len(tot_cost)), np.log2(tot_cost), 1)[0]
         print("Total costs   :", tot_cost)

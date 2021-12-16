@@ -32,8 +32,8 @@ def blue_fn(ls, N, problem, sampler=None, N1 = 1, No = 1, verbose=True):
     L = len(ls)
 
     cpu_cost = 0.0
-    sumse = [np.zeros((L,)) for n in range(No)]
-    sumsc = [np.zeros((L,L)) for n in range(No)]
+    sumse = [zeros((L,)) for n in range(No)]
+    sumsc = [zeros((L,L)) for n in range(No)]
 
     if sampler is None:
         def sampler(ls, N):

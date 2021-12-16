@@ -2,7 +2,7 @@ import numpy as np
 import networkx as nx
 from itertools import combinations
 from .multi_blue_fn import blue_fn
-from .multi_blue_opt import BLUEMultiObjectiveSampleAllocationProblem,attempt_mlmc_setup,attempt_mfmc_setup
+from .multi_blue_opt import BLUEMultiObjectiveSampleAllocationProblem
 from .blue_opt import attempt_mlmc_setup,attempt_mfmc_setup
 from .layered_network_graph import LayeredNetworkGraph
 from .spg import spg
@@ -30,7 +30,7 @@ def is_subclique(G,nodelist):
     return H.size() == (n*(n-1))//2
 
 # Are any checks on the correlation matrix necessary?
-class BLUEProblem(object):
+class MultiBLUEProblem(object):
     def __init__(self, M, C=None, costs=None, n_outputs=1, **params):
         '''
             INPUT:
@@ -109,7 +109,7 @@ class BLUEProblem(object):
     def get_correlations(self):
         return [self.get_correlation(n) for n in range(self.n_outputs)]
 
-    def get_covariance(self, n=1):
+    def get_covariance(self, n=0):
         '''
             Computes the model covariance matrix
             this is just the model graph adjacency
@@ -124,7 +124,7 @@ class BLUEProblem(object):
         C[maskinf] = 0
         return C
 
-    def get_correlation(self,n=1):
+    def get_correlation(self,n=0):
         C = self.get_covariance(n)
         s = np.sqrt(np.diag(C))
         return C/np.outer(s,s)
@@ -135,7 +135,7 @@ class BLUEProblem(object):
         for n in range(self.n_outputs):
             self.reorder_graph_nodes(n, ordering=ordering)
 
-    def reorder_graph_nodes(self, n=1, ordering=None):
+    def reorder_graph_nodes(self, n=0, ordering=None):
         M = self.M
         G = self.G[n]
         H = nx.Graph()
@@ -193,7 +193,7 @@ class BLUEProblem(object):
         for n in range(self.n_outputs):
             self.check_graph(n, remove_uncorrelated=remove_uncorrelated)
 
-    def check_graph(self, n=1, remove_uncorrelated=False):
+    def check_graph(self, n=0, remove_uncorrelated=False):
 
         if remove_uncorrelated:
             for i in range(self.M):
@@ -212,7 +212,7 @@ class BLUEProblem(object):
             #self.G = SG
             #self.M = SG.number_of_nodes()
 
-    def draw_model_graph(self, n=1):
+    def draw_model_graph(self, n=0):
         import matplotlib.pyplot as plt
         from matplotlib.colors import to_rgba
         G = self.G[n]
@@ -258,7 +258,7 @@ class BLUEProblem(object):
         for n in range(self.n_outputs):
             self.project_covariance(n)
 
-    def project_covariance(self, n=1):
+    def project_covariance(self, n=0):
         
         spg_params = self.params["spg_params"]
 
@@ -373,15 +373,16 @@ class BLUEProblem(object):
         groups = [[] for k in range(K)]
         for n in range(self.n_outputs):
             for k in range(Ks[n]):
-                if multi_groups[n][k] not in groups:
-                    groups[k].append(multi_groups[n][k])
+                for group in multi_groups[n][k]:
+                    if group not in groups:
+                        groups[k].append(group)
 
         for k in range(K):
             groups[k].sort()
 
         C = self.get_covariances() # this has some NaNs, but these should never come up
         costs = self.get_group_costs(groups)
-        multi_costs = [self.group_costs(item) for item in multi_groups]
+        multi_costs = [self.get_group_costs(item) for item in multi_groups]
 
         print("Computing optimal sample allocation...")
         self.SAP = BLUEMultiObjectiveSampleAllocationProblem(C, K, Ks, groups, multi_groups, costs, multi_costs)
@@ -417,15 +418,17 @@ class BLUEProblem(object):
         flattened_groups = self.SAP.flattened_groups
         sample_list      = self.SAP.samples
         
-        sums = []
+        sums = [[] for n in range(self.n_outputs)]
         for ls,N in zip(flattened_groups, sample_list):
             if N == 0:
-                sums.append(np.zeros_like(ls))
+                for n in range(self.n_outputs):
+                    sums[n].append(np.zeros_like(ls))
                 continue
             sumse,_,_ = self.blue_fn(ls, N)
-            sums.append(sumse)
+            for n in range(self.n_outputs):
+                sums[n].append(sumse[n].copy())
 
-        mus,Vs = self.SAP.compute_BLUE_estimators(sums)
+        mus,Vs = self.SAP.compute_BLUE_estimators(sums, sample_list)
         errs = np.sqrt(Vs)
         tot_cost = self.SAP.tot_cost
 
@@ -505,7 +508,7 @@ class BLUEProblem(object):
         errs = [np.sqrt(mlmc_data["variance"](samples)) for mlmc_data in best_data]
 
         mlmc_data = {"samples" : samples, "errors" : errs, "total_cost" : cost}
-        print("Best MLMC estimator found. Coupled models:", best_group, " Error: ", max(errs), " Cost: ", cost, "\n")
+        print("Best MLMC estimator found. Coupled models:", best_group, " Max error: ", max(errs), " Cost: ", cost, "\n")
         return best_group, mlmc_data
 
     def solve_mlmc(self, budget=None, eps=None):
@@ -588,7 +591,7 @@ class BLUEProblem(object):
 
         alphas = [mfmc_data["alphas"] for mfmc_data in best_data]
         mfmc_data = {"samples" : samples, "errors" : errs, "total_cost" : cost, "alphas" : alphas}
-        print("Best MFMC estimator found. Coupled models:", best_group, " Error: ", errs, " Cost: ", cost, "\n")
+        print("Best MFMC estimator found. Coupled models:", best_group, " Max error: ", errs, " Cost: ", cost, "\n")
         return best_group, mfmc_data
 
     def solve_mfmc(self, budget=None, eps=None):
@@ -644,7 +647,7 @@ class BLUEProblem(object):
             tot_cost = N_MC*cost
             errs = np.sqrt(Vs/N_MC)
 
-        print("Standard MC estimator ready. Error: ", max(errs), "Cost: ", tot_cost)
+        print("Standard MC estimator ready. Max error: ", max(errs), "Cost: ", tot_cost)
 
         print("\nSampling standard MC estimator...\n")
         sumse,_,_ = self.blue_fn([0], N_MC)

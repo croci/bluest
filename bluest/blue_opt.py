@@ -211,7 +211,7 @@ class BLUESampleAllocationProblem(object):
 
         self.get_variance_functions()
 
-    def compute_BLUE_estimator(self, sums):
+    def compute_BLUE_estimator(self, sums, samples=None):
         C = self.C
         K = self.K
         L = self.L
@@ -220,6 +220,8 @@ class BLUESampleAllocationProblem(object):
         invcovs  = self.invcovs
         sizes    = self.sizes
         cumsizes = self.cumsizes
+
+        if samples is None: samples = self.samples
 
         y = np.zeros((L,))
         sums = [sums[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
@@ -232,7 +234,7 @@ class BLUESampleAllocationProblem(object):
         def PHIinvY0(m, y, delta=0.0):
             if abs(m).max() < 0.05: return np.inf
 
-            self.get_phi(m,delta=delta)
+            PHI = self.get_phi(m,delta=delta)
 
             idx = get_nnz_rows_cols(m,groups,cumsizes)
             PHI = PHI[idx]
@@ -251,7 +253,7 @@ class BLUESampleAllocationProblem(object):
 
             return mu, var
 
-        return PHIinvY0(self.samples, y)
+        return PHIinvY0(samples, y)
 
     def get_variance_functions(self):
         C = self.C
@@ -459,19 +461,21 @@ class BLUESampleAllocationProblem(object):
 
         m = cp.Variable(L, nonneg=True)
         t = cp.Variable(nonneg=True)
+        #NOTE: the m@e >= 1 constraint is only needed to avoid arbitrarily small
+        #      positive values of m. Note that it does not affect the BLUE since
+        #      it is a constraint satisfied automatically by the integer formulation 
         if budget is not None:
             obj = cp.Minimize(t)
             #constraints = [w@m <= budget, m@e >= 1, self.cvxpy_fun(m,t,delta=0) >> 0]
-            constraints = [w@m <= 1, self.cvxpy_fun(m,t,delta=0) >> 0]
+            constraints = [w@m <= 1, m@e >= 1/budget, self.cvxpy_fun(m,t,delta=0) >> 0]
         else:
             obj = cp.Minimize((w/np.linalg.norm(w))@m)
             #constraints = [m@e >= 1, t <= eps**2, self.cvxpy_fun(m,t,delta=0) >> 0]
-            #constraints = [t <= 1, m@e >= eps**2, self.cvxpy_fun(m,t,delta=0) >> 0]
-            constraints = [t <= 1, self.cvxpy_fun(m,t,delta=0) >> 0]
+            constraints = [t <= 1, m@e >= eps**2, self.cvxpy_fun(m,t,delta=0) >> 0]
         prob = cp.Problem(obj, constraints)
         
         #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
-        prob.solve(verbose=True, solver="CVXOPT", abstol=1.0e-15, reltol=1.e-6, max_iters=1000, feastol=1.0e-5, kttsolver='chol',refinement=2)
+        prob.solve(verbose=True, solver="CVXOPT", abstol=1.0e-10, reltol=1.e-6, max_iters=1000, feastol=1.0e-5, kttsolver='chol',refinement=2)
 
         if eps is not None: m.value *= eps**-2
         else:               m.value *= budget
