@@ -181,6 +181,16 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
 
         return np.array(m.X)
 
+    def cvxpy_block_fun(self, m, t, delta=0):
+        mappings = self.mappings
+        No       = self.n_outputs
+        NN       = self.N + 1
+        mats = [self.SAPS[n].cvxpy_fun(m[mappings[n]],t,delta=delta) for n in range(No)]
+        block = [[np.zeros((NN,NN)) for n in range(No)] for m in range(No)]
+        for n in range(No):
+            block[n][n] = mats[n]
+        return cp.bmat(block)
+
     def cvxpy_solve(self, budget=None, eps=None, delta=0.0):
         budget, eps = self.check_input(budget, eps)
 
@@ -191,18 +201,19 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
         mappings = self.mappings
 
         m = cp.Variable(L, nonneg=True)
-        t = cp.Variable(No, nonneg=True)
+        t = cp.Variable(nonneg=True)
         if budget is not None:
-            obj = cp.Minimize(cp.max(t))
-            constraints = [w@m <= 1, m@self.e >= 1/budget]
-            constraints += [self.SAPS[n].cvxpy_fun(m[mappings[n]],t[n],delta=0) >> 0 for n in range(No)]
+            obj = cp.Minimize(t)
+            constraints = [w@m <= 1, m@e >= 1/budget]#, self.cvxpy_block_fun(m,t,delta=0) >> 0]
+            constraints = constraints + [self.SAPS[n].cvxpy_fun(m[mappings[n]],t,delta=0) >> 0 for n in range(No)]
         else:
             obj = cp.Minimize((w/np.linalg.norm(w))@m)
             scale = np.linalg.norm(eps**2)
-            constraints = [t <= eps**2/scale, m@self.e >= scale]
-            constraints += [self.SAPS[n].cvxpy_fun(m[mappings[n]],t[n],delta=0) >> 0 for n in range(No)]
+            constraints = [t <= eps**2/scale, m@e >= scale]
+            constraints = constraints + [self.SAPS[n].cvxpy_fun(m[mappings[n]],t,delta=0) >> 0 for n in range(No)]
         prob = cp.Problem(obj, constraints)
         
+        #prob.solve(verbose=True, solver="SCS", acceleration_lookback=0, acceleration_interval=0)
         #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
         prob.solve(verbose=True, solver="CVXOPT", abstol=1.0e-12, reltol=1.e-5, max_iters=1000, feastol=1.0e-5, kttsolver='chol',refinement=2)
 

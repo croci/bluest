@@ -40,6 +40,8 @@ def get_bcs(V, sample):
 
     return [left_bc, right_bc, top_bc, bottom_bc]
 
+No = 2
+
 class PoissonProblem(MultiBLUEProblem):
     def sampler(self, ls, N=1):
         L = len(ls)
@@ -49,11 +51,12 @@ class PoissonProblem(MultiBLUEProblem):
     def evaluate(self, ls, samples, N=1):
 
         L = len(ls)
-        out = [0 for i in range(L)]
+        out = [[0 for i in range(L)]  for n in range(No)]
 
         for i in range(L):
             if ls[i] > n_levels-1:
-                out[i] = sum(samples[i]**2)
+                for n in range(No):
+                    out[n][i] = sum(samples[i]**2)
                 continue
 
             V = function_spaces[ls[i]]
@@ -73,9 +76,10 @@ class PoissonProblem(MultiBLUEProblem):
 
             solve(lhs == rhs, sol, bcs)
 
-            out[i] = assemble(inner(grad(sol),grad(sol))*dx)
+            out[0][i] = assemble(inner(grad(sol),grad(sol))*dx)
+            out[1][i] = assemble(exp(sin(sol))*dx)
 
-        return [out]
+        return out
 
 M = n_levels + 1
 
@@ -108,9 +112,8 @@ def build_test_covariance(string="full"):
     else: pass
     return C
 
-No = 1 #NOTE: if you change this remember to update the class function above
-C = build_test_covariance("full")
-problem = PoissonProblem(M, C=[C.copy() for n in range(No)], n_outputs=No, covariance_estimation_samples=50, spg_params={"maxit":10000, "maxfc":10**6, "verbose":False})
+C = [build_test_covariance("full") for n in range(No)]
+problem = PoissonProblem(M, C=C, n_outputs=No, covariance_estimation_samples=50, spg_params={"maxit":10000, "maxfc":10**6, "verbose":False})
 print(problem.get_correlation(), "\n")
 
 complexity_test = False
@@ -155,7 +158,7 @@ if comparison_test:
     sys.exit(0)
 
 problem.setup_solver(K=3, budget=10., solver="cvxpy")
-#problem.setup_solver(K=3, eps=10, solver="gurobi")
+problem.setup_solver(K=3, eps=10, solver="cvxpy")
 
 out = problem.solve()
 

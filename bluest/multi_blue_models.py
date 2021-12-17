@@ -374,7 +374,7 @@ class MultiBLUEProblem(object):
         for n in range(self.n_outputs):
             for k in range(Ks[n]):
                 for group in multi_groups[n][k]:
-                    if group not in groups:
+                    if group not in groups[k]:
                         groups[k].append(group)
 
         for k in range(K):
