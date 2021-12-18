@@ -10,11 +10,11 @@ from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds
 # MOSEK is suboptimal for some reason
 # SCS does not converge
 mosek_params = {
-    "MSK_DPAR_INTPNT_CO_TOL_DFEAS": 1e-10,
-    "MSK_DPAR_INTPNT_CO_TOL_PFEAS": 1e-10,
-    "MSK_DPAR_INTPNT_CO_TOL_REL_GAP": 1e-15,
-    'MSK_DPAR_INTPNT_CO_TOL_MU_RED' : 1.0e-10,
-    'MSK_DPAR_INTPNT_CO_TOL_NEAR_REL':1,
+    "MSK_DPAR_INTPNT_CO_TOL_DFEAS": 1e-7,
+    "MSK_DPAR_INTPNT_CO_TOL_PFEAS": 1e-7,
+    "MSK_DPAR_INTPNT_CO_TOL_REL_GAP": 1e-9,
+    'MSK_DPAR_INTPNT_CO_TOL_MU_RED' : 1.0e-7,
+    #'MSK_DPAR_INTPNT_CO_TOL_NEAR_REL':1,
     "MSK_IPAR_INTPNT_MAX_ITERATIONS": 100,
 }
 
@@ -92,11 +92,17 @@ def get_nnz_rows_cols(m,groups,cumsizes):
     out = np.unique(np.concatenate([groups[k][abs(m[k]) > 1.0e-6].flatten() for k in range(K)]))
     return out.reshape((len(out),1)), out.reshape((1,len(out)))
 
-def best_closest_integer_solution(sol, obj, constr, N):
+def best_closest_integer_solution(sol, obj, constr, N, e=None):
     L = len(sol)
     val = np.sort(sol)[-int(1.5*N):][0]
     ss = np.round(sol).astype(int)
     idx = np.argwhere(sol >= val).flatten()
+    if e is not None:
+        idx2 = np.argwhere(e > 0).flatten()
+        temp = np.argsort(sol[e>0])[::-1]
+        idx2 = idx2[temp[:N]]
+        idx = np.unique(np.concatenate([idx, idx2]))
+
     LL = len(idx)
 
     lb = np.zeros((L,)); ub = np.zeros((L,))
@@ -342,7 +348,7 @@ class BLUESampleAllocationProblem(object):
                 objective  = self.variance
                 
                 ss = samples.copy()
-                samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N)
+                samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N, self.e)
                 if np.isinf(fval):
                     print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
                     samples = self.gurobi_solve(budget=budget, integer=True)
@@ -357,7 +363,7 @@ class BLUESampleAllocationProblem(object):
                 objective  = lambda m : m@self.costs
                 constraint = lambda m : m@self.e >= 1 and self.variance(m*eps**2) <= 1.0001
 
-                samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N)
+                samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N, self.e)
 
                 if np.isinf(fval):
                     print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")

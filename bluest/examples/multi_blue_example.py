@@ -11,6 +11,8 @@ mpiRank = MPI.rank(MPI.comm_world)
 
 RNG = RandomState(mpiRank)
 
+No = 2
+
 dim = 2 # spatial dimension
 buf = 1
 n_levels  = 6
@@ -39,8 +41,6 @@ def get_bcs(V, sample):
     bottom_bc = DirichletBC(V, bottom_bexpr, bottom)
 
     return [left_bc, right_bc, top_bc, bottom_bc]
-
-No = 2
 
 class PoissonProblem(MultiBLUEProblem):
     def sampler(self, ls, N=1):
@@ -77,7 +77,7 @@ class PoissonProblem(MultiBLUEProblem):
             solve(lhs == rhs, sol, bcs)
 
             out[0][i] = assemble(inner(grad(sol),grad(sol))*dx)
-            out[1][i] = assemble(exp(sin(sol))*dx)
+            out[1][i] = assemble(exp(sin(sol))*dx)*10
 
         return out
 
@@ -112,13 +112,13 @@ def build_test_covariance(string="full"):
     else: pass
     return C
 
-C = [build_test_covariance("full") for n in range(No)]
+C = [build_test_covariance(["full","full"][n]) for n in range(No)]
 problem = PoissonProblem(M, C=C, n_outputs=No, covariance_estimation_samples=50, spg_params={"maxit":10000, "maxfc":10**6, "verbose":False})
 print(problem.get_correlation(), "\n")
 
 complexity_test = False
 standard_MC_test = False
-comparison_test = False
+comparison_test = True
 
 if complexity_test:
     eps = 2**np.arange(3,8)
@@ -127,7 +127,7 @@ if complexity_test:
 
 if standard_MC_test:
     eps = 0.1
-    problem.setup_solver(K=3, eps=eps, solver="gurobi")
+    problem.setup_solver(K=3, eps=eps, solver="cvxpy")
     out = problem.solve()
     out_MC = problem.solve_mc(eps=eps)
     print("BLUE (mu, err, cost):", out)
@@ -157,10 +157,7 @@ if comparison_test:
 
     sys.exit(0)
 
-problem.setup_solver(K=3, budget=10., solver="cvxpy")
-problem.setup_solver(K=3, eps=10, solver="cvxpy")
+problem.setup_solver(K=7, budget=10, solver="scipy")
+#problem.setup_solver(K=3, eps=[1.1, 0.1], solver="scipy")
 
-out = problem.solve()
-
-#TODO: 1- cost comparison with MFMC
-#      2- compare actual result with standard MC
+#out = problem.solve()

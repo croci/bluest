@@ -105,10 +105,10 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
             elif solver == "scipy":  samples = self.scipy_solve(budget=budget, x0=x0)
 
             if not integer:
-                constraint = lambda m : m@self.costs <= 1.001*budget and m@self.e >= 1
+                constraint = lambda m : m@self.costs <= 1.001*budget and all(m[self.mappings[n]]@self.e[self.mappings[n]] >= 1 for n in range(self.n_outputs))
                 objective  = lambda m : max(self.variances(m))
                 
-                samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N)
+                samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N, self.e)
                 if np.isinf(fval):
                     print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
                     samples = self.gurobi_solve(budget=budget, integer=True)
@@ -121,9 +121,9 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
 
             if not integer:
                 objective  = lambda m : m@self.costs
-                constraint = lambda m : m@self.e >= 1 and all(np.array(self.variances(m)) <= 1.001*np.array(eps)**2)
+                constraint = lambda m : all(m[self.mappings[n]]@self.e[self.mappings[n]] >= 1 for n in range(self.n_outputs)) and all(np.array(self.variances(m)) <= 1.001*np.array(eps)**2)
 
-                samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N)
+                samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N, self.e)
 
                 if np.isinf(fval):
                     print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
@@ -151,6 +151,13 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
         No       = self.n_outputs
         w        = self.costs
         e        = self.e
+        mappings = self.mappings
+
+        es = []
+        for n in range(No):
+            ee = np.zeros((L,))
+            ee[mappings[n]] = e.copy()[mappings[n]]
+            es.append(ee)
 
         M = Model("BLUE")
         M.params.NonConvex = 2
@@ -163,12 +170,12 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
         if eps is not None:
             M.setObjective(m@w, GRB.MINIMIZE)
             M.addConstrs((t[n][0] <= eps[n]**2 for n in range(No)), name="variance")
-            M.addConstr(m@e >= 1, name="minimum_samples")
+            M.addConstrs((m@es[n] >= 1 for n in range(No)), name="minimum_samples")
         else:
             tt = M.addVar(vtype=GRB.CONTINUOUS, name="tmax")
             M.setObjective(tt, GRB.MINIMIZE)
             M.addConstr(m@w <= budget, name="budget")
-            M.addConstr(m@e >= 1, name="minimum_samples")
+            M.addConstrs((m@es[n] >= 1 for n in range(No)), name="minimum_samples")
             M.addConstrs((tt >= t[n][0] for n in range(No)), name="max_constraint")
 
         # enforcing the constraint that PHI^{-1}[:,0] = t
@@ -181,15 +188,27 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
 
         return np.array(m.X)
 
-    def cvxpy_block_fun(self, m, t, delta=0):
+    def cvxpy_get_multi_constraints(self, m, t, eps=None):
         mappings = self.mappings
         No       = self.n_outputs
-        NN       = self.N + 1
-        mats = [self.SAPS[n].cvxpy_fun(m[mappings[n]],t,delta=delta) for n in range(No)]
-        block = [[np.zeros((NN,NN)) for n in range(No)] for m in range(No)]
+
+        if eps is None: eps = np.ones((No,))
+
+        #scale = 1.e-5
+        #scale = 1.e-1
+        scales = np.array([1/self.SAPS[n].psi.sum(axis=0).mean() for n in range(No)])
+
+        PHIs = []
+        bmats = []
         for n in range(No):
-            block[n][n] = mats[n]
-        return cp.bmat(block)
+            assert self.SAPS[n].psi.shape[1] == len(mappings[n])
+            Nn = self.SAPS[n].N
+            PHIs.append(cp.reshape((self.SAPS[n].psi*scales[n])@m[mappings[n]], (Nn,Nn)))
+            e = np.zeros((Nn,1)); e[0] = np.sqrt(scales[n])/eps[n]
+            bmats.append(cp.bmat([[PHIs[-1], e], [e.T, cp.reshape(t[n],(1,1))]]))
+
+        out = [bmat >> 0 for bmat in bmats]
+        return out
 
     def cvxpy_solve(self, budget=None, eps=None, delta=0.0):
         budget, eps = self.check_input(budget, eps)
@@ -200,26 +219,32 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
         e        = self.e
         mappings = self.mappings
 
+        scales = np.array([1/self.SAPS[n].psi.sum(axis=0).mean() for n in range(No)])
+
         m = cp.Variable(L, nonneg=True)
-        t = cp.Variable(nonneg=True)
+        t = cp.Variable(No, nonneg=True)
         if budget is not None:
-            obj = cp.Minimize(t)
-            constraints = [w@m <= 1, m@e >= 1/budget]#, self.cvxpy_block_fun(m,t,delta=0) >> 0]
-            constraints = constraints + [self.SAPS[n].cvxpy_fun(m[mappings[n]],t,delta=0) >> 0 for n in range(No)]
+            tt = cp.Variable(nonneg=True)
+            obj = cp.Minimize(tt)
+            constraints = [w@m <= 1., t <= tt, *self.cvxpy_get_multi_constraints(m, t)]
+            constraints += [m[mappings[n]]@e[mappings[n]] >= 1./budget for n in range(self.n_outputs)]
         else:
             obj = cp.Minimize((w/np.linalg.norm(w))@m)
-            scale = np.linalg.norm(eps**2)
-            constraints = [t <= eps**2/scale, m@e >= scale]
-            constraints = constraints + [self.SAPS[n].cvxpy_fun(m[mappings[n]],t,delta=0) >> 0 for n in range(No)]
+            #scale = np.linalg.norm(eps**2)
+            #constraints = [t <= eps**2/scale, m@e >= scale, *self.cvxpy_get_multi_constraints(m,t,False)]
+            scale = 1
+            constraints = [t <= 1, *self.cvxpy_get_multi_constraints(m,t,eps)]
+            constraints += [m[mappings[n]]@e[mappings[n]] >= 1 for n in range(self.n_outputs)]
         prob = cp.Problem(obj, constraints)
         
         #prob.solve(verbose=True, solver="SCS", acceleration_lookback=0, acceleration_interval=0)
         #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
-        prob.solve(verbose=True, solver="CVXOPT", abstol=1.0e-12, reltol=1.e-5, max_iters=1000, feastol=1.0e-5, kttsolver='chol',refinement=2)
+        prob.solve(verbose=True, solver="CVXOPT", abstol=1.0e-8, reltol=1.e-5, max_iters=1000, feastol=1.0e-5, kttsolver='chol',refinement=2)
 
         if eps is not None: m.value /= scale
         else:               m.value *= budget
 
+        print(m.value.round())
         return m.value
 
     def scipy_solve(self, budget=None, eps=None, x0=None):
@@ -237,24 +262,40 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
 
         def variance_GH(m,nohess=False,delta=0):
             out = self.variance_GH(m,nohess=nohess,delta=delta)
-            return (sum(out[i]) for i in range(3-int(nohess)))
+            var = sum(out[0])
+            grad = np.zeros((L,))
+            for n in range(No):
+                grad[mappings[n]] += out[1][n]
+            if not nohess:
+                hess = np.zeros((L,L))
+                for n in range(No):
+                    hess[np.ix_(mappings[n],mappings[n])] += out[2][n]
+
+                return var,grad,hess
+            else:
+                return var,grad
 
         print("Optimizing using scipy...")
 
+        es = []
+        for n in range(No):
+            ee = np.zeros((L,))
+            ee[mappings[n]] = e.copy()[mappings[n]]
+            es.append(ee)
+
         constraint1 = Bounds(0.0*np.ones((L,)), np.inf*np.ones((L,)), keep_feasible=True)
-        constraint3 = LinearConstraint(e, 1, np.inf, keep_feasible=True)
+        constraint3 = [LinearConstraint(ee, 1, np.inf, keep_feasible=True) for ee in es]
         if budget is not None:
             constraint2 = LinearConstraint(w, -np.inf, budget)
 
-            if x0 is None: x0 = np.ceil(10*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w)
-            res = minimize(lambda x : variance_GH(x,nohess=True,delta=0), x0, jac=True, hess=lambda x : variance_GH(x,delta=0)[-1], bounds=constraint1, constraints=[constraint2,constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-8)
+            if x0 is None: x0 = np.ceil(budget*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w)
+            res = minimize(lambda x : variance_GH(x,nohess=True,delta=0), x0, jac=True, hess=lambda x : variance_GH(x,delta=0)[-1], bounds=constraint1, constraints=[constraint2]+constraint3, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-8)
 
         else:
             epsq = eps**2
-            constraint2 = [NonlinearConstraint(lambda x : self.SAPS[n].variance(x[mappings[n]],delta=0), epsq, epsq, jac = lambda x : self.SAPS[n].variance_with_grad_and_hess(x[mappings[n]],nohess=True,delta=0)[1], hess=lambda x,p : self.SAPS[n].variance_with_grad_and_hess(x[mappings[n]],delta=0)[2]*p) for n in range(No)]
-            if x0 is None: x0 = np.ceil(eps**-2*np.random.rand(L))
-            res = minimize(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=constraint2 + [constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":10000, 'verbose':3}, tol = 1.0e-6)
-
+            constraint2 = [NonlinearConstraint(lambda x : self.SAPS[n].variance(x[mappings[n]],delta=0), epsq[n], epsq[n], jac = lambda x : self.SAPS[n].variance_with_grad_and_hess(x[mappings[n]],nohess=True,delta=0)[1], hess=lambda x,p : self.SAPS[n].variance_with_grad_and_hess(x[mappings[n]],delta=0)[2]*p) for n in range(No)]
+            if x0 is None: x0 = np.ceil(np.linalg.norm(eps)**-2*np.random.rand(L))
+            res = minimize(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=constraint2 + constraint3, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":10000, 'verbose':3}, tol = 1.0e-8)
 
         return res.x
 
