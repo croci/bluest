@@ -194,9 +194,7 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
 
         if eps is None: eps = np.ones((No,))
 
-        #scale = 1.e-5
-        #scale = 1.e-1
-        scales = np.array([1/self.SAPS[n].psi.sum(axis=0).mean() for n in range(No)])
+        scales = np.array([1/abs(self.SAPS[n].psi).sum(axis=0).mean() for n in range(No)])
 
         PHIs = []
         bmats = []
@@ -219,7 +217,7 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
         e        = self.e
         mappings = self.mappings
 
-        scales = np.array([1/self.SAPS[n].psi.sum(axis=0).mean() for n in range(No)])
+        scales = np.array([1/abs(self.SAPS[n].psi).sum(axis=0).mean() for n in range(No)])
 
         m = cp.Variable(L, nonneg=True)
         t = cp.Variable(No, nonneg=True)
@@ -230,19 +228,16 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
             constraints += [m[mappings[n]]@e[mappings[n]] >= 1./budget for n in range(self.n_outputs)]
         else:
             obj = cp.Minimize((w/np.linalg.norm(w))@m)
-            #scale = np.linalg.norm(eps**2)
-            #constraints = [t <= eps**2/scale, m@e >= scale, *self.cvxpy_get_multi_constraints(m,t,False)]
-            scale = 1
             constraints = [t <= 1, *self.cvxpy_get_multi_constraints(m,t,eps)]
             constraints += [m[mappings[n]]@e[mappings[n]] >= 1 for n in range(self.n_outputs)]
+
         prob = cp.Problem(obj, constraints)
         
         #prob.solve(verbose=True, solver="SCS", acceleration_lookback=0, acceleration_interval=0)
         #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
         prob.solve(verbose=True, solver="CVXOPT", abstol=1.0e-8, reltol=1.e-5, max_iters=1000, feastol=1.0e-5, kttsolver='chol',refinement=2)
 
-        if eps is not None: m.value /= scale
-        else:               m.value *= budget
+        if budget is not None: m.value *= budget
 
         print(m.value.round())
         return m.value

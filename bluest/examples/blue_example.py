@@ -74,6 +74,7 @@ class PoissonProblem(BLUEProblem):
             solve(lhs == rhs, sol, bcs)
 
             out[i] = assemble(inner(grad(sol),grad(sol))*dx)
+            #out[i] = assemble(exp(sin(sol))*dx)
 
         return out
 
@@ -114,7 +115,7 @@ print(problem.get_correlation(), "\n")
 
 complexity_test = False
 standard_MC_test = False
-comparison_test = True
+comparison_test = False
 
 if complexity_test:
     eps = 2**np.arange(3,8)
@@ -153,10 +154,7 @@ if comparison_test:
 
     sys.exit(0)
 
-problem.setup_solver(K=3, budget=1., solver="cvxpy")
-#problem.setup_solver(K=3, eps=10, solver="gurobi")
+#problem.setup_solver(K=3, budget=10., solver="cvxpy")
+problem.setup_solver(K=3, eps=0.1, solver="cvxpy")
 
-out = problem.solve()
-
-#TODO: 1- cost comparison with MFMC
-#      2- compare actual result with standard MC
+#out = problem.solve()

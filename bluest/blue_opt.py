@@ -6,6 +6,9 @@ import cvxpy as cp
 from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds
 
 ########################################################
+#NOTE: the m@e >= 1 constraint is only needed to avoid arbitrarily small
+#      positive values of m. Note that it does not affect the BLUE since
+#      it is a constraint satisfied automatically by the integer formulation 
 
 # MOSEK is suboptimal for some reason
 # SCS does not converge
@@ -361,7 +364,7 @@ class BLUESampleAllocationProblem(object):
 
             if not integer:
                 objective  = lambda m : m@self.costs
-                constraint = lambda m : m@self.e >= 1 and self.variance(m*eps**2) <= 1.0001
+                constraint = lambda m : m@self.e >= 1 and self.variance(m) <= 1.0001
 
                 samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N, self.e)
 
@@ -451,10 +454,11 @@ class BLUESampleAllocationProblem(object):
 
         return np.array(m.X)
 
-    def cvxpy_fun(self, m, t, delta=0):
-        N = self.N
-        PHI = cp.reshape(self.psi@m + delta*np.eye(N).flatten(), (N,N))
-        ee = np.zeros((N,1)); ee[0] = 1
+    def cvxpy_fun(self, m, t, eps=1):
+        N = self.N;
+        scales = 1/abs(self.psi).sum(axis=0).mean()
+        PHI = cp.reshape((self.psi*scales)@m, (N,N))
+        ee = np.zeros((N,1)); ee[0] = np.sqrt(scales)/eps
         return cp.bmat([[PHI,ee],[ee.T,cp.reshape(t,(1,1))]])
 
     def cvxpy_solve(self, budget=None, eps=None, delta=0.0):
@@ -465,26 +469,25 @@ class BLUESampleAllocationProblem(object):
         w        = self.costs
         e        = self.e
 
+        #scalings = np.array([np.linalg.norm(self.psi[:,i]) for i in range(L)])
+        scales = 1/abs(self.psi).sum(axis=0).mean()
+
         m = cp.Variable(L, nonneg=True)
         t = cp.Variable(nonneg=True)
-        #NOTE: the m@e >= 1 constraint is only needed to avoid arbitrarily small
-        #      positive values of m. Note that it does not affect the BLUE since
-        #      it is a constraint satisfied automatically by the integer formulation 
         if budget is not None:
             obj = cp.Minimize(t)
-            #constraints = [w@m <= budget, m@e >= 1, self.cvxpy_fun(m,t,delta=0) >> 0]
-            constraints = [w@m <= 1, m@e >= 1/budget, self.cvxpy_fun(m,t,delta=0) >> 0]
+
+            constraints = [w@m <= 1, m@e >= 1/budget, self.cvxpy_fun(m,t) >> 0]
         else:
             obj = cp.Minimize((w/np.linalg.norm(w))@m)
-            #constraints = [m@e >= 1, t <= eps**2, self.cvxpy_fun(m,t,delta=0) >> 0]
-            constraints = [t <= 1, m@e >= eps**2, self.cvxpy_fun(m,t,delta=0) >> 0]
-        prob = cp.Problem(obj, constraints)
-        
-        #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
-        prob.solve(verbose=True, solver="CVXOPT", abstol=1.0e-10, reltol=1.e-6, max_iters=1000, feastol=1.0e-5, kttsolver='chol',refinement=2)
+            constraints = [t <= 1, m@e >= 1, self.cvxpy_fun(m,t,eps) >> 0]
 
-        if eps is not None: m.value *= eps**-2
-        else:               m.value *= budget
+        prob = cp.Problem(obj, constraints)
+
+        #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
+        prob.solve(verbose=True, solver="CVXOPT", abstol=1.0e-10, reltol=1.e-6, max_iters=1000, feastol=1.0e-6, kttsolver='chol',refinement=2)
+
+        if eps is None: m.value *= budget
 
         return m.value
 
@@ -532,7 +535,7 @@ if __name__ == '__main__':
     problem = BLUESampleAllocationProblem(C, KK, groups, costs)
 
     scipy_sol,cvxpy_sol,gurobi_sol = None,None,None
-    if False:
+    if True:
         cvxpy_sol  = problem.solve(eps=eps, solver="cvxpy")
         scipy_sol  = problem.solve(eps=eps, solver="scipy")
         #gurobi_sol = problem.solve(eps=eps, solver="gurobi")

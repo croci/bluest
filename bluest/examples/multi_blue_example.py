@@ -77,7 +77,7 @@ class PoissonProblem(MultiBLUEProblem):
             solve(lhs == rhs, sol, bcs)
 
             out[0][i] = assemble(inner(grad(sol),grad(sol))*dx)
-            out[1][i] = assemble(exp(sin(sol))*dx)*10
+            out[1][i] = assemble(exp(sin(sol))*dx)/100
 
         return out
 
@@ -118,7 +118,7 @@ print(problem.get_correlation(), "\n")
 
 complexity_test = False
 standard_MC_test = False
-comparison_test = True
+comparison_test = False
 
 if complexity_test:
     eps = 2**np.arange(3,8)
@@ -157,7 +157,7 @@ if comparison_test:
 
     sys.exit(0)
 
-problem.setup_solver(K=7, budget=10, solver="scipy")
-#problem.setup_solver(K=3, eps=[1.1, 0.1], solver="scipy")
+problem.setup_solver(K=3, budget=10, solver="cvxpy")
+#problem.setup_solver(K=3, eps=[1.1, 0.1], solver="cvxpy")
 
 #out = problem.solve()
