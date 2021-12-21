@@ -19,6 +19,8 @@ n_levels  = 6
 
 meshes = [RectangleMesh(MPI.comm_self, Point(0,0), Point(1,1), 2**l, 2**l) for l in range(buf, n_levels+buf)][::-1]
 
+if No > 2: x = np.linspace(0.1,0.9, No-2) # if close to the boundary var = 0
+
 function_spaces = [FunctionSpace(mesh, 'CG', 1) for mesh in meshes]
 
 left   = CompiledSubDomain("near(x[0], 0) && on_boundary")
@@ -76,8 +78,11 @@ class PoissonProblem(MultiBLUEProblem):
 
             solve(lhs == rhs, sol, bcs)
 
-            out[0][i] = assemble(inner(grad(sol),grad(sol))*dx)
-            out[1][i] = assemble(exp(sin(sol))*dx)/100
+            out[0][i] = assemble(inner(grad(sol),grad(sol))*dx)/100
+            out[1][i] = assemble(exp(sin(sol))*dx)
+            if No > 2:
+                for n in range(2,No):
+                    out[n][i] = sol(Point(x[n-2],x[n-2]))
 
         return out
 
@@ -112,13 +117,13 @@ def build_test_covariance(string="full"):
     else: pass
     return C
 
-C = [build_test_covariance(["full","full"][n]) for n in range(No)]
+C = [build_test_covariance("full") for n in range(No)]
 problem = PoissonProblem(M, C=C, n_outputs=No, covariance_estimation_samples=50, spg_params={"maxit":10000, "maxfc":10**6, "verbose":False})
 print(problem.get_correlation(), "\n")
 
 complexity_test = False
 standard_MC_test = False
-comparison_test = False
+comparison_test = True
 
 if complexity_test:
     eps = 2**np.arange(3,8)
@@ -141,23 +146,23 @@ if comparison_test:
     out_MFMC = problem.setup_mfmc(budget=budget, eps=eps)
     out      = problem.setup_solver(K=M, budget=budget, eps=eps, solver="cvxpy")
 
-    print("\nMLMC. Error: %f. Total cost: %f." % (out_MLMC[1]["error"], out_MLMC[1]["total_cost"]))
-    print("MFMC. Error: %f. Total cost: %f." % (out_MFMC[1]["error"], out_MFMC[1]["total_cost"]))
-    print("BLUE. Error: %f. Total cost: %f.\n\n" % (out["error"],      out["total_cost"]))
+    print("\nMLMC. Errors: %s. Total cost: %f." % (out_MLMC[1]["errors"], out_MLMC[1]["total_cost"]))
+    print("MFMC. Errors: %s. Total cost: %f." % (out_MFMC[1]["errors"],   out_MFMC[1]["total_cost"]))
+    print("BLUE. Errors: %s. Total cost: %f.\n\n" % (out[1]["errors"],    out[1]["total_cost"]))
 
-    eps    = 0.25;  budget = None
+    eps = 0.025;  budget = None
 
     out_MLMC = problem.setup_mlmc(budget=budget, eps=eps)
     out_MFMC = problem.setup_mfmc(budget=budget, eps=eps)
     out      = problem.setup_solver(K=M, budget=budget, eps=eps, solver="cvxpy")
 
-    print("\nMLMC. Error: %f. Total cost: %f." % (out_MLMC[1]["error"], out_MLMC[1]["total_cost"]))
-    print("MFMC. Error: %f. Total cost: %f." % (out_MFMC[1]["error"], out_MFMC[1]["total_cost"]))
-    print("BLUE. Error: %f. Total cost: %f." % (out["error"],      out["total_cost"]))
+    print("\nMLMC. Errors: %s. Total cost: %f." % (out_MLMC[1]["errors"], out_MLMC[1]["total_cost"]))
+    print("MFMC. Errors: %s. Total cost: %f." % (out_MFMC[1]["errors"],   out_MFMC[1]["total_cost"]))
+    print("BLUE. Errors: %s. Total cost: %f." % (out[1]["errors"],        out[1]["total_cost"]))
 
     sys.exit(0)
 
 problem.setup_solver(K=3, budget=10, solver="cvxpy")
-#problem.setup_solver(K=3, eps=[1.1, 0.1], solver="cvxpy")
+#problem.setup_solver(K=3, eps=0.25, solver="cvxpy")
 
 #out = problem.solve()

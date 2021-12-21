@@ -6,9 +6,6 @@ import cvxpy as cp
 from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds
 
 ########################################################
-#NOTE: the m@e >= 1 constraint is only needed to avoid arbitrarily small
-#      positive values of m. Note that it does not affect the BLUE since
-#      it is a constraint satisfied automatically by the integer formulation 
 
 # MOSEK is suboptimal for some reason
 # SCS does not converge
@@ -95,35 +92,7 @@ def get_nnz_rows_cols(m,groups,cumsizes):
     out = np.unique(np.concatenate([groups[k][abs(m[k]) > 1.0e-6].flatten() for k in range(K)]))
     return out.reshape((len(out),1)), out.reshape((1,len(out)))
 
-def check_solution(item, ss, bnds, idx, constr, obj):
-    fval = np.inf
-    val = ss.copy()
-    val[idx] = bnds[item, idx]
-    if constr(val): fval = obj(val)
-    return val,fval
-
-def get_feasible_integer_bounds(sol, N, e=None):
-    L = len(sol)
-    val = np.sort(sol)[-int(1.5*N):][0]
-    ss = np.round(sol).astype(int)
-    idx = np.argwhere(sol >= val).flatten()
-    if e is not None:
-        idx2 = np.argwhere(e > 0).flatten()
-        temp = np.argsort(sol[e>0])[::-1]
-        idx2 = idx2[temp[:N]]
-        idx = np.unique(np.concatenate([idx, idx2]))
-
-    LL = len(idx)
-
-    lb = np.zeros((L,)); ub = np.zeros((L,))
-    lb[idx] = np.floor(sol).astype(int)[idx]
-    ub[idx] = np.ceil(sol).astype(int)[idx]
-
-    return lb,ub
-
 def best_closest_integer_solution(sol, obj, constr, N, e=None):
-    from functools import reduce
-
     L = len(sol)
     val = np.sort(sol)[-int(1.5*N):][0]
     ss = np.round(sol).astype(int)
@@ -141,36 +110,21 @@ def best_closest_integer_solution(sol, obj, constr, N, e=None):
     ub[idx] = np.ceil(sol).astype(int)[idx]
     bnds = np.vstack([lb,ub])
 
-    def check_sol(item):
-        fval = np.inf
+    best_val  = sol.copy()
+    best_fval = np.inf
+    for item in product([0,1], repeat=LL):
         val = ss.copy()
         val[idx] = bnds[item, idx]
-        if constr(val): fval = obj(val)
-        return val,fval
-
-    def reduce_func(a,b):
-        if a[1] < b[1]: return a
-        else:           return b
-
-    best_val, best_fval = reduce(reduce_func, (check_sol(item) for item in product([0,1], repeat=LL)))
+        constraint_satisfied = constr(val)
+        if constraint_satisfied:
+            fval = obj(val)
+            if fval < best_fval:
+                best_fval = fval
+                best_val = val.copy()
+                if LL > 15:
+                    return best_val.astype(int), best_fval
 
     return best_val.astype(int), best_fval
-    
-    #best_val  = sol.copy()
-    #best_fval = np.inf
-    #for item in product([0,1], repeat=LL):
-    #    val = ss.copy()
-    #    val[idx] = bnds[item, idx]
-    #    constraint_satisfied = constr(val)
-    #    if constraint_satisfied:
-    #        fval = obj(val)
-    #        if fval < best_fval:
-    #            best_fval = fval
-    #            best_val = val.copy()
-    #            if LL > 15:
-    #                return best_val.astype(int), best_fval
-
-    #return best_val.astype(int), best_fval
 
 @njit(fastmath=True)
 def hessKQ(k, q, Lk, Lq, groupsk, groupsq, invcovsk, invcovsq, invPHI):
@@ -393,10 +347,6 @@ class BLUESampleAllocationProblem(object):
                 constraint = lambda m : m@self.costs <= 1.0001*budget and m@self.e >= 1
                 objective  = self.variance
                 
-                #lb,ub = get_feasible_integer_bounds(samples, self.N, self.e)
-                #lb = np.floor(samples); ub = np.ceil(samples)
-                #samples = self.gurobi_solve(budget=budget, extra_bounds=(lb,ub,objective(samples)))
-
                 ss = samples.copy()
                 samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N, self.e)
                 if np.isinf(fval):
@@ -413,15 +363,12 @@ class BLUESampleAllocationProblem(object):
                 objective  = lambda m : m@self.costs
                 constraint = lambda m : m@self.e >= 1 and self.variance(m) <= 1.0001
 
-                #lb,ub = get_feasible_integer_bounds(samples, self.N, self.e)
-                #lb = np.floor(samples); ub = np.ceil(samples)
-                #samples = self.gurobi_solve(eps=eps, extra_bounds=(lb,ub,objective(samples)))
-
                 samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N, self.e)
 
                 if np.isinf(fval):
                     print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
                     samples = self.gurobi_solve(eps=eps, integer=True)
+
 
         samples = samples.astype(int)
 
@@ -467,7 +414,7 @@ class BLUESampleAllocationProblem(object):
 
         return out
 
-    def gurobi_solve(self, budget=None, eps=None, integer=False, extra_bounds=None):
+    def gurobi_solve(self, budget=None, eps=None, integer=False):
         from gurobipy import Model,GRB
 
         if budget is None and eps is None:
@@ -495,17 +442,6 @@ class BLUESampleAllocationProblem(object):
             M.addConstr(m@w <= budget, name="budget")
             M.addConstr(m@e >= 1, name="minimum_samples")
 
-        if extra_bounds is not None:
-            M.addConstrs((m[i] >= extra_bounds[0][i] for i in range(L)))
-            M.addConstrs((m[i] <= extra_bounds[1][i] for i in range(L)))
-            m.vType = GRB.INTEGER
-
-            hardlimit = 60
-            tol = 1.0e-3
-
-            M.setParam('TimeLimit', hardlimit)
-            M.setParam('BestObjStop', (1+tol)*extra_bounds[2])
-
         # enforcing the constraint that PHI^{-1}[:,0] = t
         constr = self.gurobi_constraint(m,t)
         M.addConstr(constr[0] == 1)
@@ -516,10 +452,10 @@ class BLUESampleAllocationProblem(object):
         return np.array(m.X)
 
     def cvxpy_fun(self, m, t, eps=1):
-        N = self.N;
-        scales = 1/abs(self.psi).sum(axis=0).mean()
-        PHI = cp.reshape((self.psi*scales)@m, (N,N))
-        ee = np.zeros((N,1)); ee[0] = np.sqrt(scales)/eps
+        N = self.N; L = self.L
+        scalings = np.array([np.linalg.norm(self.psi[:,i]) for i in range(L)])
+        PHI = cp.reshape((self.psi/scalings)@m, (N,N))
+        ee = np.zeros((N,1)); ee[0] = 1
         return cp.bmat([[PHI,ee],[ee.T,cp.reshape(t,(1,1))]])
 
     def cvxpy_solve(self, budget=None, eps=None, delta=0.0):
@@ -530,25 +466,31 @@ class BLUESampleAllocationProblem(object):
         w        = self.costs
         e        = self.e
 
-        #scalings = np.array([np.linalg.norm(self.psi[:,i]) for i in range(L)])
-        scales = 1/abs(self.psi).sum(axis=0).mean()
+        scalings = np.array([np.linalg.norm(self.psi[:,i]) for i in range(L)])
 
         m = cp.Variable(L, nonneg=True)
         t = cp.Variable(nonneg=True)
+        #NOTE: the m@e >= 1 constraint is only needed to avoid arbitrarily small
+        #      positive values of m. Note that it does not affect the BLUE since
+        #      it is a constraint satisfied automatically by the integer formulation 
         if budget is not None:
             obj = cp.Minimize(t)
 
-            constraints = [w@m <= 1, m@e >= 1/budget, self.cvxpy_fun(m,t) >> 0]
+            ww = w/scalings/budget; wscale = np.linalg.norm(ww)
+            ee = e/scalings; escale = np.linalg.norm(ee)
+            #constraints = [w@m <= budget, m@e >= 1, self.cvxpy_fun(m,t,delta=0) >> 0]
+            constraints = [(ww/wscale)@m <= 1/wscale, m@(ee/escale) >= 1/escale, self.cvxpy_fun(m,t) >> 0]
         else:
-            obj = cp.Minimize((w/np.linalg.norm(w))@m)
-            constraints = [t <= 1, m@e >= 1, self.cvxpy_fun(m,t,eps) >> 0]
-
+            ww = w/scalings; wscale = np.linalg.norm(ww)
+            ee = e/scalings; escale = np.linalg.norm(ee)
+            obj = cp.Minimize((ww*eps**2/wscale)@m)
+            constraints = [m@(ee/escale) >= 1/escale, t <= eps**2, self.cvxpy_fun(m,t,eps=eps) >> 0]
         prob = cp.Problem(obj, constraints)
 
         #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
         prob.solve(verbose=True, solver="CVXOPT", abstol=1.0e-10, reltol=1.e-6, max_iters=1000, feastol=1.0e-6, kttsolver='chol',refinement=2)
 
-        if eps is None: m.value *= budget
+        m.value /= scalings
 
         return m.value
 

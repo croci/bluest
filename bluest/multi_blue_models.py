@@ -399,9 +399,9 @@ class MultiBLUEProblem(object):
         print("\nModel groups selected: %s\n" % which_groups)
         print("BLUE estimator setup. Max error: ", np.sqrt(max(Vs)), " Cost: ", cost_BLUE, "\n")
 
-        blue_data = {"samples" : self.SAP.samples, "error" : np.sqrt(max(Vs)), "total_cost" : cost_BLUE}
+        blue_data = {"samples" : self.SAP.samples, "errors" : np.sqrt(Vs), "total_cost" : cost_BLUE}
 
-        return blue_data
+        return which_groups, blue_data
 
     def solve(self, K=3, budget=None, eps=None, groups=None, multi_groups=None, integer=False, solver=None):
         if solver is None: solver = self.params["optimization_solver"]
@@ -465,7 +465,7 @@ class MultiBLUEProblem(object):
         best_group = None
         min_err  = np.inf
         min_cost = np.inf
-        best_data = {}
+        best_data = [{} for n in range(self.n_outputs)]
         CC = self.get_covariances()
         for group in groups:
             assert group[0] == 0
@@ -490,13 +490,15 @@ class MultiBLUEProblem(object):
                 if err < min_err:
                     min_err = err
                     best_group = group
-                    best_data.update(mlmc_data_list)
+                    for n in range(self.n_outputs):
+                        best_data[n].update(mlmc_data_list[n])
             else:
                 cost = np.max(np.vstack([mlmc_data["samples"] for mlmc_data in mlmc_data_list]), axis=0)@w[group]
                 if cost < min_cost:
                     min_cost = cost
                     best_group = group
-                    best_data.update(mlmc_data_list)
+                    for n in range(self.n_outputs):
+                        best_data[n].update(mlmc_data_list[n])
 
         samples = np.max(np.vstack([mlmc_data["samples"] for mlmc_data in best_data]), axis=0)
         cost = samples@w[best_group]
@@ -556,7 +558,7 @@ class MultiBLUEProblem(object):
         best_group = None
         min_err  = np.inf
         min_cost = np.inf
-        best_data = {}
+        best_data = [{} for n in range(self.n_outputs)]
         clique_list = [clique for clique in nx.enumerate_all_cliques(GG) if 0 in clique]
         for clique in clique_list:
             assert clique[0] == 0
@@ -571,14 +573,16 @@ class MultiBLUEProblem(object):
                 err = max(mfmc_data["error"] for mfmc_data in mfmc_data_list)
                 if err < min_err:
                     min_err = err
-                    best_group = group
-                    best_data.update(mfmc_data_list)
+                    best_group = clique
+                    for n in range(self.n_outputs):
+                        best_data[n].update(mfmc_data_list[n])
             else:
-                cost = np.max(np.vstack([mfmc_data["samples"] for mfmc_data in mfmc_data_list]), axis=0)@w[group]
+                cost = np.max(np.vstack([mfmc_data["samples"] for mfmc_data in mfmc_data_list]), axis=0)@w[clique]
                 if cost < min_cost:
                     min_cost = cost
-                    best_group = group
-                    best_data.update(mfmc_data_list)
+                    best_group = clique
+                    for n in range(self.n_outputs):
+                        best_data[n].update(mfmc_data_list[n])
 
         samples = np.max(np.vstack([mfmc_data["samples"] for mfmc_data in best_data]), axis=0)
         cost = samples@w[best_group]
