@@ -1,9 +1,10 @@
 import numpy as np
-from numba import njit,jit
-from itertools import combinations, product
+from itertools import combinations
 
 import cvxpy as cp
 from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds
+
+from .misc_opt import assemble_psi,get_phi_full,variance_full,variance_GH_full,PHIinvY0
 
 ########################################################
 #NOTE: the m@e >= 1 constraint is only needed to avoid arbitrarily small
@@ -20,209 +21,6 @@ mosek_params = {
     #'MSK_DPAR_INTPNT_CO_TOL_NEAR_REL':1,
     "MSK_IPAR_INTPNT_MAX_ITERATIONS": 100,
 }
-
-def attempt_mlmc_setup(v, w, budget=None, eps=None):
-    if budget is None and eps is None:
-        raise ValueError("Need to specify either budget or RMSE tolerance")
-    elif budget is not None and eps is not None:
-        eps = None
-
-    if not all(np.isfinite(v)): return False,None
-
-    q = sum(np.sqrt(v*w))
-    if budget is not None: mu = budget/q
-    else:                  mu = q/eps**2
-    m = mu*np.sqrt(v/w)
-
-    variance = lambda m : sum(v/m)
-    if budget is not None: constraint = lambda m : m@w <= budget and all(m >= 1)
-    else:                  constraint = lambda m : variance(m) <= eps**2 and all(m >= 1)
-
-    m,var = best_closest_integer_solution(m, variance, constraint, len(v))
-    if np.isinf(var): return False,None
-
-    err = np.sqrt(var)
-    tot_cost = m@w
-
-    mlmc_data = {"samples" : m, "error" : err, "total_cost" : tot_cost, "variance" : variance}
-
-    return True,mlmc_data
-
-def attempt_mfmc_setup(sigmas, rhos, costs, budget=None, eps=None):
-    if budget is None and eps is None:
-        raise ValueError("Need to specify either budget or RMSE tolerance")
-    elif budget is not None and eps is not None:
-        eps = None
-
-    if not all(np.isfinite(sigmas)): return False,None
-
-    idx = np.argsort(abs(rhos))[::-1]
-    assert idx[0] == 0
-
-    s = sigmas[idx]
-    rho = np.concatenate([rhos[idx], [0]])
-    w = costs[idx]
-    cost_ratio = w[:-1]/w[1:]
-    rho_ratio = (rho[:-2]**2 - rho[1:-1]**2)/(rho[1:-1]**2 - rho[2:]**2)
-
-    feasible = all(cost_ratio > rho_ratio)
-    if not feasible: return feasible,None
-
-    alphas = rho[1:-1]*s[0]/s[1:]
-
-    r = np.sqrt(w[0]/w*(rho[:-1]**2 - rho[1:]**2)/(1-rho[1]**2))
-    if budget is not None: m1 = budget/(w@r)
-    else:                  m1 = eps**-2*(w@r)*(s[0]**2/w[0])*(1-rho[1]**2)
-    m = np.concatenate([[m1], m1*r[1:]])
-
-    variance = lambda m : s[0]**2/m[0] + sum((1/m[:-1]-1/m[1:])*(alphas**2*s[1:]**2 - 2*alphas*rho[1:-1]*s[0]*s[1:]))
-    if budget is not None: constraint = lambda m : m@w <= budget and m[0] >= 1 and all(m[:-1] <= m[1:])
-    else:                  constraint = lambda m : variance(m) <= eps**2 and m[0] >= 1 and all(m[:-1] <= m[1:])
-
-    m,var = best_closest_integer_solution(m, variance, constraint, len(sigmas))
-    if np.isinf(var): return False,None
-
-    err = np.sqrt(var)
-    tot_cost = m@w
-
-    mfmc_data = {"samples" : m, "error" : err, "total_cost" : tot_cost, "alphas" : alphas, "variance" : variance}
-
-    return feasible,mfmc_data
-
-def get_nnz_rows_cols(m,groups,cumsizes):
-    K = len(cumsizes)-1
-    m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
-    out = np.unique(np.concatenate([groups[k][abs(m[k]) > 1.0e-6].flatten() for k in range(K)]))
-    return out.reshape((len(out),1)), out.reshape((1,len(out)))
-
-def check_solution(item, ss, bnds, idx, constr, obj):
-    fval = np.inf
-    val = ss.copy()
-    val[idx] = bnds[item, idx]
-    if constr(val): fval = obj(val)
-    return val,fval
-
-def get_feasible_integer_bounds(sol, N, e=None):
-    L = len(sol)
-    val = np.sort(sol)[-int(1.5*N):][0]
-    ss = np.round(sol).astype(int)
-    idx = np.argwhere(sol >= val).flatten()
-    if e is not None:
-        idx2 = np.argwhere(e > 0).flatten()
-        temp = np.argsort(sol[e>0])[::-1]
-        idx2 = idx2[temp[:N]]
-        idx = np.unique(np.concatenate([idx, idx2]))
-
-    LL = len(idx)
-
-    lb = np.zeros((L,)); ub = np.zeros((L,))
-    lb[idx] = np.floor(sol).astype(int)[idx]
-    ub[idx] = np.ceil(sol).astype(int)[idx]
-
-    return lb,ub
-
-def best_closest_integer_solution(sol, obj, constr, N, e=None):
-    from functools import reduce
-
-    L = len(sol)
-    val = np.sort(sol)[-int(1.5*N):][0]
-    ss = np.round(sol).astype(int)
-    idx = np.argwhere(sol >= val).flatten()
-    if e is not None:
-        idx2 = np.argwhere(e > 0).flatten()
-        temp = np.argsort(sol[e>0])[::-1]
-        idx2 = idx2[temp[:N]]
-        idx = np.unique(np.concatenate([idx, idx2]))
-
-    LL = len(idx)
-
-    lb = np.zeros((L,)); ub = np.zeros((L,))
-    lb[idx] = np.floor(sol).astype(int)[idx]
-    ub[idx] = np.ceil(sol).astype(int)[idx]
-    bnds = np.vstack([lb,ub])
-
-    def check_sol(item):
-        fval = np.inf
-        val = ss.copy()
-        val[idx] = bnds[item, idx]
-        if constr(val): fval = obj(val)
-        return val,fval
-
-    def reduce_func(a,b):
-        if a[1] < b[1]: return a
-        else:           return b
-
-    best_val, best_fval = reduce(reduce_func, (check_sol(item) for item in product([0,1], repeat=LL)))
-
-    return best_val.astype(int), best_fval
-    
-    #best_val  = sol.copy()
-    #best_fval = np.inf
-    #for item in product([0,1], repeat=LL):
-    #    val = ss.copy()
-    #    val[idx] = bnds[item, idx]
-    #    constraint_satisfied = constr(val)
-    #    if constraint_satisfied:
-    #        fval = obj(val)
-    #        if fval < best_fval:
-    #            best_fval = fval
-    #            best_val = val.copy()
-    #            if LL > 15:
-    #                return best_val.astype(int), best_fval
-
-    #return best_val.astype(int), best_fval
-
-@njit(fastmath=True)
-def hessKQ(k, q, Lk, Lq, groupsk, groupsq, invcovsk, invcovsq, invPHI):
-    hess = np.zeros((Lk,Lq))
-    ip = invPHI[:,0]
-    ksq = k*k; qsq = q*q
-    for ik in range(Lk):
-        ipk = ip[groupsk[ik]]
-        for iq in range(Lq):
-            ipq = ip[groupsq[iq]]
-            iP = invPHI[groupsk[ik],:][:,groupsq[iq]]
-            #ipk@icovk@invPHI@icovq@ipq + the simmetric
-            #ipk_m Ck_ms*(sum_j iP_sj*(sumi_l Cq_jl*ipq_l)_j)_s
-            for lk in range(k):
-                for jk in range(k):
-                    for jq in range(q):
-                        for lq in range(q):
-                            hess[ik,iq] += ipk[lk]*invcovsk[ksq*ik + k*lk + jk]*iP[jk,jq]*invcovsq[qsq*iq + q*jq + lq]*ipq[lq]
-
-    return hess
-
-@njit(fastmath=True)
-def gradK(k, Lk,groupsk,invcovsk,invPHI):
-    grad = np.zeros((Lk,))
-    for i in range(Lk):
-        temp = invPHI[groupsk[i],0] # PHI is symmetric
-        for j in range(k):
-            for l in range(k):
-                grad[i] += temp[j]*invcovsk[k*k*i + k*j + l]*temp[l]
-
-    return grad
-
-@njit(fastmath=True)
-def objectiveK(N, k,Lk,mk,groupsk,invcovsk):
-    PHI = np.zeros((N*N,))
-    for i in range(Lk):
-        group = groupsk[i]
-        for j in range(k):
-            for l in range(k):
-                PHI[N*group[j]+group[l]] += mk[i]*invcovsk[k*k*i + k*j + l]
-
-    return PHI
-
-@njit(fastmath=True)
-def fastobj(N,k,Lk,groupsk,invcovsk):
-    psi = np.zeros((N*N,Lk))
-    for i in range(Lk):
-        group = groupsk[i]
-        for j in range(k):
-            for l in range(k):
-                psi[N*group[j]+group[l], i] += invcovsk[k*k*i + k*j + l]
-    return psi
 
 ########################################################
 
@@ -283,98 +81,28 @@ class BLUESampleAllocationProblem(object):
                     for s in range(k):
                         y[groups[k-1][i][j]] += invcovs[k-1][k*k*i + k*j + s]*sums[k-1][i][s]
 
-        def PHIinvY0(m, y, delta=0.0):
-            if abs(m).max() < 0.05: return np.inf
-
-            PHI = self.get_phi(m,delta=delta)
-
-            idx = get_nnz_rows_cols(m,groups,cumsizes)
-            PHI = PHI[idx]
-            y   = y[idx[0].flatten()]
-
-            assert idx[0].min() == 0 # the model 0 must always be sampled if this triggers something is wrong
-
-            try:
-                mu = np.linalg.solve(PHI,y)[0]
-                var = np.linalg.solve(PHI, np.eye(len(y), 1).flatten())[0]
-            except np.linalg.LinAlgError:
-                assert False # after the above fix we should never get here
-                pinvPHI = np.linalg.pinv(PHI)
-                mu  = (pinvPHI@y)[0]
-                var = pinvPHI[0,0] 
-
-            return mu, var
-
-        return PHIinvY0(samples, y)
+        return PHIinvY0(samples, y, self.psi, groups, cumsizes)
 
     def get_variance_functions(self):
-        C = self.C
-        L = self.L
-        K = self.K
-        N = self.N
+        N        = self.N
+        K        = self.K
         groups   = self.groups
         invcovs  = self.invcovs
         sizes    = self.sizes
         cumsizes = self.cumsizes
 
-        self.psi = np.hstack([fastobj(N,k,sizes[k],groups[k-1],invcovs[k-1]) for k in range(1,K+1)])
+        self.psi = np.hstack([assemble_psi(N,k,sizes[k],groups[k-1],invcovs[k-1]) for k in range(1,K+1)])
 
-        def get_phi(m, delta=0.0, option=2):
-            if option == 1:
-                PHI = delta*np.eye(N).flatten()
-                m = [m[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
-                for k in range(1, K+1):
-                    PHI += objectiveK(N, k,sizes[k],m[k-1],groups[k-1],invcovs[k-1])
-
-                PHI = PHI.reshape((N,N))
-            else:
-                PHI = delta*np.eye(N) + (self.psi@m).reshape((N,N))
-
-            return PHI
-
-        def variance(m, delta=0.0):
-            if abs(m).max() < 0.05: return np.inf
-            PHI = get_phi(m,delta=delta)
-
-            idx = get_nnz_rows_cols(m,groups,cumsizes)
-            PHI = PHI[idx]
-
-            assert idx[0].min() == 0 # the model 0 must always be sampled if this triggers something is wrong
-
-            try: out = np.linalg.solve(PHI,np.eye(len(idx[0]),1).flatten())[0]
-            except np.linalg.LinAlgError:
-                assert False # after the above fix we should never get here
-                out = np.linalg.pinv(PHI)[0,0]
-
-            return out
-
-        def variance_with_grad_and_hess(m, delta=0.0, nohess=False):
-            if abs(m).max() < 0.05: return np.inf, np.inf*np.ones((L,))
-            PHI = get_phi(m,delta=delta)
-
-            invPHI = np.linalg.pinv(PHI)
-
-            idx = get_nnz_rows_cols(m,groups,cumsizes)
-            var = np.linalg.inv(PHI[idx])[0,0]
-            #var = invPHI[0,0]
-
-            grad = -np.concatenate([gradK(k, sizes[k], groups[k-1], invcovs[k-1], invPHI) for k in range(1,K+1)])
-
-            if nohess: return var,grad,None
-
-            hess = np.zeros((L,L))
-
-            for k in range(1,K+1):
-                for q in range(1,K+1):
-                    hess[cumsizes[k-1]:cumsizes[k],:][:,cumsizes[q-1]:cumsizes[q]] = hessKQ(k, q, sizes[k], sizes[q], groups[k-1], groups[q-1], invcovs[k-1], invcovs[q-1], invPHI)
-
-            hess += hess.T
-
-            return var,grad,hess
+        def get_phi(m, delta=0):
+            return get_phi_full(m, self.psi, delta=delta)
+        def variance(m, delta=0):
+            return variance_full(m, self.psi, groups, cumsizes, delta=delta)
+        def variance_GH(m, delta=0, nohess=False):
+            return variance_GH_full(m, self.psi, groups, sizes, invcovs, delta=delta, nohess=nohess)
 
         self.get_phi = get_phi
         self.variance = variance
-        self.variance_with_grad_and_hess = variance_with_grad_and_hess
+        self.variance_GH = variance_GH
 
     def solve(self, budget=None, eps=None, solver="cvxpy", integer=False, x0=None):
         if budget is None and eps is None:
@@ -393,10 +121,6 @@ class BLUESampleAllocationProblem(object):
                 constraint = lambda m : m@self.costs <= 1.0001*budget and m@self.e >= 1
                 objective  = self.variance
                 
-                #lb,ub = get_feasible_integer_bounds(samples, self.N, self.e)
-                #lb = np.floor(samples); ub = np.ceil(samples)
-                #samples = self.gurobi_solve(budget=budget, extra_bounds=(lb,ub,objective(samples)))
-
                 ss = samples.copy()
                 samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N, self.e)
                 if np.isinf(fval):
@@ -412,10 +136,6 @@ class BLUESampleAllocationProblem(object):
             if not integer:
                 objective  = lambda m : m@self.costs
                 constraint = lambda m : m@self.e >= 1 and self.variance(m) <= 1.0001
-
-                #lb,ub = get_feasible_integer_bounds(samples, self.N, self.e)
-                #lb = np.floor(samples); ub = np.ceil(samples)
-                #samples = self.gurobi_solve(eps=eps, extra_bounds=(lb,ub,objective(samples)))
 
                 samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N, self.e)
 
@@ -568,11 +288,11 @@ class BLUESampleAllocationProblem(object):
             constraint2 = LinearConstraint(w, -np.inf, budget)
 
             if x0 is None: x0 = np.ceil(10*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w)
-            res = minimize(lambda x : self.variance_with_grad_and_hess(x,nohess=True,delta=0)[:-1], x0, jac=True, hess=lambda x : self.variance_with_grad_and_hess(x,delta=0)[-1], bounds=constraint1, constraints=[constraint2,constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-8)
+            res = minimize(lambda x : self.variance_GH(x,nohess=True,delta=0)[:-1], x0, jac=True, hess=lambda x : self.variance_GH(x,delta=0)[-1], bounds=constraint1, constraints=[constraint2,constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-8)
 
         else:
             epsq = eps**2
-            constraint2 = NonlinearConstraint(lambda x : self.variance(x,delta=0), epsq, epsq, jac = lambda x : self.variance_with_grad_and_hess(x,nohess=True,delta=0)[1], hess=lambda x,p : self.variance_with_grad_and_hess(x,delta=0)[2]*p)
+            constraint2 = NonlinearConstraint(lambda x : self.variance(x,delta=0), epsq, epsq, jac = lambda x : self.variance_GH(x,nohess=True,delta=0)[1], hess=lambda x,p : self.variance_GH(x,delta=0)[2]*p)
             if x0 is None: x0 = np.ceil(eps**-2*np.random.rand(L))
             res = minimize(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=[constraint2,constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":10000, 'verbose':3}, tol = 1.0e-10)
 

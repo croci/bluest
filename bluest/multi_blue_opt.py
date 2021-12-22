@@ -1,6 +1,7 @@
 import numpy as np
 from itertools import combinations, product
-from .blue_opt import BLUESampleAllocationProblem,best_closest_integer_solution, mosek_params
+from .blue_opt import BLUESampleAllocationProblem,mosek_params
+from .misc_opt import best_closest_integer_solution
 
 import cvxpy as cp
 from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds

@@ -11,7 +11,7 @@ mpiRank = MPI.rank(MPI.comm_world)
 
 RNG = RandomState(mpiRank)
 
-No = 2
+No = 102
 
 dim = 2 # spatial dimension
 buf = 1
@@ -163,6 +163,6 @@ if comparison_test:
     sys.exit(0)
 
 problem.setup_solver(K=3, budget=10, solver="cvxpy")
-#problem.setup_solver(K=3, eps=0.25, solver="cvxpy")
+#problem.setup_solver(K=3, eps=0.025, solver="cvxpy")
 
 #out = problem.solve()

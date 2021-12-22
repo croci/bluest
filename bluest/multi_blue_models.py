@@ -3,7 +3,7 @@ import networkx as nx
 from itertools import combinations
 from .multi_blue_fn import blue_fn
 from .multi_blue_opt import BLUEMultiObjectiveSampleAllocationProblem
-from .blue_opt import attempt_mlmc_setup,attempt_mfmc_setup
+from .misc_opt import attempt_mlmc_setup,attempt_mfmc_setup
 from .layered_network_graph import LayeredNetworkGraph
 from .spg import spg
 

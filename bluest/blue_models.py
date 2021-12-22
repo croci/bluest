@@ -2,7 +2,8 @@ import numpy as np
 import networkx as nx
 from itertools import combinations
 from .blue_fn import blue_fn
-from .blue_opt import BLUESampleAllocationProblem,attempt_mlmc_setup,attempt_mfmc_setup
+from .blue_opt import BLUESampleAllocationProblem
+from .misc_opt import attempt_mlmc_setup,attempt_mfmc_setup
 from .spg import spg
 
 spg_default_params = {"maxit" : 200,
