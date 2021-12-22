@@ -93,49 +93,192 @@ def check_solution(item, ss, bnds, idx, constr, obj):
 
 def get_feasible_integer_bounds(sol, N, e=None):
     L = len(sol)
-    val = np.sort(sol)[-int(1.5*N):][0] # you need to take at least -1*N or it will cause trouble to MLMC and MFMC routines
+    val = np.sort(sol)[-int(1.2*N):][0] # you need to take at least -1*N or it will cause trouble to MLMC and MFMC routines
     ss = np.round(sol).astype(int)
     idx = np.argwhere(sol >= val).flatten()
     if e is not None:
-        idx2 = np.argwhere(e > 0).flatten()
-        temp = np.argsort(sol[e>0])[::-1]
+        if sum(e > 0.99) == 0:
+            val = 1/sum(e)/2
+            while sum(e > val) == 0: val /= 2
+        else: val = 0.99
+        idx2 = np.argwhere(e > val).flatten()
+        temp = np.argsort(sol[e>val])[::-1]
         idx2 = idx2[temp[:N]]
         idx = np.unique(np.concatenate([idx, idx2]))
 
     LL = len(idx)
 
-    lb = np.zeros((L,)); ub = np.zeros((L,))
+    lb = np.zeros((L,),dtype=int); ub = np.zeros((L,),dtype=int)
     lb[idx] = np.floor(sol).astype(int)[idx]
     ub[idx] = np.ceil(sol).astype(int)[idx]
 
-    return lb,ub,idx
+    temp = np.argsort(lb[idx])[::-1]
+    idx = idx[temp]
 
-def best_closest_integer_solution(sol, obj, constr, N, e=None):
+    return lb[idx],ub[idx],idx
+
+def unpackbits(x, num_bits):
+    if np.issubdtype(x.dtype, np.floating):
+        raise ValueError("numpy data type needs to be int-like")
+    xshape = list(x.shape)
+    x = x.reshape([-1, 1])
+    mask = 2**np.arange(num_bits, dtype=x.dtype).reshape([1, num_bits])
+    return (x & mask).astype(bool).astype(np.uint8).reshape(xshape + [num_bits])
+
+def best_closest_integer_solution_BLUE_multi(sol, psis, w, e, mappings, budget=None, eps=None):
     from functools import reduce
+    
+    No = len(mappings)
+
+    N = int(round(np.sqrt(psis[0].shape[0])))
 
     lb,ub,idx = get_feasible_integer_bounds(sol, N, e=e)
 
     LL = len(idx)
-    bnds = np.vstack([lb,ub])[:,idx]
+    if LL > 24:
+        raise ValueError('Too many dimensions to brute-force it')
+
+    combs = unpackbits(np.arange(2**LL, dtype=int), LL)
+    bnds = np.vstack([lb,ub])
+    ee = np.ones((LL,),dtype=bool)
+    ms = bnds[combs, ee].T
 
     val = np.round(sol).astype(int)
+    subval = val[idx].copy()
 
+    baseval  = val.copy(); baseval[idx] = 0 
+    basephis  = [psis[n]@baseval[mappings[n]] for n in range(No)]
+    basecost = w@baseval
+    basees    = [e[mappings[n]]@baseval[mappings[n]] for n in range(No)]
+
+    redmaps = [np.array([i for i in range(len(idx)) if idx[i] in mappings[n]]) for n in range(No)]
+    #redmaps = [np.array([np.argwhere(idx == item).flatten()[0] for item in mappings[n] if item in idx]) for n in range(No)]
+    idxs = [np.array([np.argwhere(mappings[n] == item).flatten()[0] for item in idx if item in mappings[n]]) for n in range(No)]
+
+    es = []
+    for n in range(No):
+        basee = basees[n]
+        if basee < 1:
+            es.append(np.argwhere(basee + e[idx][redmaps[n]]@ms[redmaps[n],:] >= 1).flatten())
+
+    es = np.unique(np.concatenate(es))
+    if len(es) == 0: return None, np.inf
+    ms = ms[:, es]
+
+    if budget is not None and basecost > budget: return None,np.inf
+
+    costs = basecost + w[idx]@ms
+
+    if budget is not None:
+        # the ms are roughly ordered from largest to smallest
+        ind = np.argwhere(costs <= 1.0001*budget).flatten()
+        if len(ind) > 0: ms = ms[:, ind][:,::-1]
+        else: return None, np.inf
+    else:
+        # larger costs should correspond to smaller variances so reordering
+        ms = ms[:, np.argsort(costs)[::-1]]
+
+    phis  = [(basephis[n].reshape((-1,1)) + psis[n][:,idxs[n]]@ms[redmaps[n],:]).T.reshape((-1,N,N)) for n in range(No)]
+    Vs    = [np.linalg.pinv(phis[n], hermitian=True, rcond=1.e-10)[:,0,0] for n in range(No)]
+    V_max = reduce(np.maximum, Vs)
+
+    if budget is not None:
+        i = np.argmin(V_max)
+    else:
+        # we ordered ms by cost earlier so this is optimal
+        i = np.argwhere(reduce(np.logical_and, [Vs[n] <= 1.0001*eps[n]**2 for n in range(No)])).flatten()
+        if len(i) > 0: i = i[-1]
+        else: return None, np.inf
+
+    val[idx] = ms[:, i]
+    best_val = val
+    best_fval = V_max[i]
+
+    assert all(abs(Vs[n][i] - np.linalg.pinv((psis[n]@best_val[mappings[n]]).reshape((N,N)), hermitian=True, rcond=1.e-10)[0,0]) < 1.0e-12 for n in range(No))
+
+    return best_val, best_fval
+
+def best_closest_integer_solution_BLUE(sol, psi, w, e, budget=None, eps=None):
+    N = int(round(np.sqrt(psi.shape[0])))
+
+    lb,ub,idx = get_feasible_integer_bounds(sol, N, e=e)
+
+    LL = len(idx)
+    if LL > 24:
+        raise ValueError('Too many dimensions to brute-force it')
+
+    combs = unpackbits(np.arange(2**LL, dtype=int), LL)
+    bnds = np.vstack([lb,ub])
     ee = np.ones((LL,),dtype=bool)
+    ms = bnds[combs, ee].T
 
-    def check_sol(item):
+    val = np.round(sol).astype(int)
+    subval = val[idx].copy()
+
+    baseval  = val.copy(); baseval[idx] = 0 
+    basephi  = psi@baseval
+    basecost = w@baseval
+    basee    = e@baseval
+
+    if basee < 1:
+        es = basee + e[idx]@ms
+        try: ms = ms[:, np.argwhere(es >= 1).flatten()]
+        except IndexError: return None,np.inf
+
+    if budget is not None and basecost > budget: return None,np.inf
+
+    costs = basecost + w[idx]@ms
+
+    if budget is not None:
+        # the ms are roughly ordered from largest to smallest
+        ms = ms[:, np.argwhere(costs <= 1.0001*budget).flatten()][:,::-1]
+    else:
+        # larger costs should correspond to smaller variances so reordering
+        ms = ms[:, np.argsort(costs)[::-1]]
+
+    phis  = (basephi.reshape((-1,1)) + psi[:,idx]@ms).T.reshape((-1,N,N))
+    Vs    = np.linalg.pinv(phis, hermitian=True, rcond=1.e-10)[:,0,0]
+
+    if budget is not None:
+        i = np.argmin(Vs)
+    else:
+        # we ordered ms by cost earlier so this is optimal
+        try: i = np.argwhere(Vs <= 1.0001*eps**2).flatten()[-1]
+        except IndexError: return None, np.inf
+
+    val[idx] = ms[:, i]
+    best_val = val
+    best_fval = Vs[i]
+
+    return best_val, best_fval
+
+def best_closest_integer_solution(sol, obj, constr, N, e=None):
+
+    lb,ub,idx = get_feasible_integer_bounds(sol, N, e=e)
+
+    LL = len(idx)
+    if LL > 24:
+        raise ValueError('Too many dimensions to brute-force it')
+
+    combs = unpackbits(np.arange(2**LL, dtype=int), LL)
+    bnds = np.vstack([lb,ub])
+    ee = np.ones((LL,),dtype=bool)
+    ms = bnds[combs, ee]
+
+    val = np.round(sol).astype(int)
+    subval = val[idx].copy()
+
+    def check_sol(i):
         fval = np.inf
-        val[idx] = bnds[item,ee]
+        val[idx] = ms[i]
         if constr(val): fval = obj(val)
-        val[idx] = np.round(sol[idx]).astype(int)
-        return item,fval
+        val[idx] = subval
+        return fval
 
-    def reduce_func(a,b):
-        if a[1] < b[1]: return a
-        else:           return b
-
-    best_item, best_fval = reduce(reduce_func, (check_sol(item) for item in product([0,1], repeat=LL)))
-    val[idx] = bnds[best_item,ee]
-    best_val = val.astype(int)
+    fvals = np.array([check_sol(i) for i in range(ms.shape[0])])
+    i = np.argmin(fvals)
+    best_val = ms[i].copy()
+    best_fval = fvals[i]
 
     return best_val, best_fval
 
@@ -168,6 +311,7 @@ def variance_full(m, psi, groups, cumsizes, delta=0.0):
     return out
 
 def variance_GH_full(m, psi, groups, sizes, invcovs, delta=0.0, nohess=False):
+    K = len(groups)
     L = len(m)
     cumsizes = np.cumsum(sizes)
 

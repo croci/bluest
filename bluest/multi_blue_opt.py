@@ -1,7 +1,7 @@
 import numpy as np
 from itertools import combinations, product
 from .blue_opt import BLUESampleAllocationProblem,mosek_params
-from .misc_opt import best_closest_integer_solution
+from .misc_opt import best_closest_integer_solution_BLUE_multi
 
 import cvxpy as cp
 from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds
@@ -109,7 +109,7 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
                 constraint = lambda m : m@self.costs <= 1.001*budget and all(m[self.mappings[n]]@self.e[self.mappings[n]] >= 1 for n in range(self.n_outputs))
                 objective  = lambda m : max(self.variances(m))
                 
-                samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N, self.e)
+                samples,fval = best_closest_integer_solution_BLUE_multi(samples, [self.SAPS[n].psi for n in range(self.n_outputs)], self.costs, self.e, self.mappings, budget=budget)
                 if np.isinf(fval):
                     print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
                     samples = self.gurobi_solve(budget=budget, integer=True)
@@ -124,7 +124,7 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
                 objective  = lambda m : m@self.costs
                 constraint = lambda m : all(m[self.mappings[n]]@self.e[self.mappings[n]] >= 1 for n in range(self.n_outputs)) and all(np.array(self.variances(m)) <= 1.001*np.array(eps)**2)
 
-                samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N, self.e)
+                samples,fval = best_closest_integer_solution_BLUE_multi(samples, [self.SAPS[n].psi for n in range(self.n_outputs)], self.costs, self.e, self.mappings, eps=eps)
 
                 if np.isinf(fval):
                     print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")

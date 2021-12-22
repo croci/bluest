@@ -4,7 +4,9 @@ from itertools import combinations
 import cvxpy as cp
 from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds
 
-from .misc_opt import assemble_psi,get_phi_full,variance_full,variance_GH_full,PHIinvY0
+try: from .misc_opt import assemble_psi,get_phi_full,variance_full,variance_GH_full,PHIinvY0,best_closest_integer_solution_BLUE
+except ImportError:
+    from misc_opt import assemble_psi,get_phi_full,variance_full,variance_GH_full,PHIinvY0,best_closest_integer_solution_BLUE
 
 ########################################################
 #NOTE: the m@e >= 1 constraint is only needed to avoid arbitrarily small
@@ -118,11 +120,8 @@ class BLUESampleAllocationProblem(object):
             elif solver == "scipy":  samples = self.scipy_solve(budget=budget, x0=x0)
 
             if not integer:
-                constraint = lambda m : m@self.costs <= 1.0001*budget and m@self.e >= 1
-                objective  = self.variance
-                
                 ss = samples.copy()
-                samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N, self.e)
+                samples,fval = best_closest_integer_solution_BLUE(samples, self.psi, self.costs, self.e, budget=budget)
                 if np.isinf(fval):
                     print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
                     samples = self.gurobi_solve(budget=budget, integer=True)
@@ -134,10 +133,8 @@ class BLUESampleAllocationProblem(object):
             elif solver == "cvxpy":  samples = self.cvxpy_solve(eps=eps)
 
             if not integer:
-                objective  = lambda m : m@self.costs
-                constraint = lambda m : m@self.e >= 1 and self.variance(m) <= 1.0001
 
-                samples,fval = best_closest_integer_solution(samples, objective, constraint, self.N, self.e)
+                samples,fval = best_closest_integer_solution_BLUE(samples, self.psi, self.costs, self.e, eps=eps)
 
                 if np.isinf(fval):
                     print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
@@ -316,7 +313,7 @@ if __name__ == '__main__':
     problem = BLUESampleAllocationProblem(C, KK, groups, costs)
 
     scipy_sol,cvxpy_sol,gurobi_sol = None,None,None
-    if True:
+    if False:
         cvxpy_sol  = problem.solve(eps=eps, solver="cvxpy")
         scipy_sol  = problem.solve(eps=eps, solver="scipy")
         #gurobi_sol = problem.solve(eps=eps, solver="gurobi")
