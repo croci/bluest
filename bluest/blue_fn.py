@@ -8,8 +8,9 @@ from shutil import get_terminal_size
 from mpi4py.MPI import COMM_WORLD, SUM
 
 cols = get_terminal_size()[0]
+if cols == 0: cols = 80 # if ran with MPI 0 cols is returned due to a bug
 
-def blue_fn(ls, N, problem, sampler=None, inners = None, N1 = 1, No = 1, verbose=True):
+def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No = 1, verbose=True):
     """
     Inputs:
         ls: tuple with the indices of the coupled models to sample from
@@ -18,8 +19,7 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, N1 = 1, No = 1, verbose
               problem.evaluate(ls, samples) returns coupled list of
               samples Ps[n][i] corresponding to output n and model ls[i].
               Optionally, user-defined problem.cost
-              Optionally, user-defined problem.get_comm() that returns
-              the MPI communicator between the sampling groups
+        comm: the MPI communicator between the sampling groups
         sampler: sampling function, by default standard Normal.
             input: N, ls
             output: samples list so that samples[i] is the model
@@ -44,8 +44,7 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, N1 = 1, No = 1, verbose
 
     verbose = verbose and COMM_WORLD.Get_rank() == 0
 
-    try: comm = problem.get_comm()
-    except AttributeError: comm = COMM_WORLD
+    if comm is None: comm = COMM_WORLD
 
     mpiRank = comm.Get_rank()
     mpiSize = comm.Get_size()

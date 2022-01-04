@@ -9,6 +9,8 @@ set_log_level(30)
 
 mpiRank = MPI.rank(MPI.comm_world)
 
+verbose = mpiRank == 0
+
 RNG = RandomState(mpiRank)
 
 dim = 2 # spatial dimension
@@ -28,10 +30,10 @@ def get_bcs(V, sample):
     _,b,c,d,_ = sample # a = 0
 
     b = math.exp(b); c = c**2; d = math.sqrt(math.fabs(d))
-    bottom_bexpr = Expression("b*sin(10*DOLFIN_PI*x[0])", b=b, degree=3)
-    left_bexpr   = Expression("c*sin(6*DOLFIN_PI*x[1])",  c=c, degree=3)
-    top_bexpr    = Expression("c + (d-c)*x[0]", c=c, d=d, degree=1)
-    right_bexpr  = Expression("b + (d-b)*x[1]", b=b, d=d, degree=1)
+    bottom_bexpr = Expression("b*sin(10*DOLFIN_PI*x[0])", b=b, degree=3, mpi_comm=MPI.comm_self)
+    left_bexpr   = Expression("c*sin(6*DOLFIN_PI*x[1])",  c=c, degree=3, mpi_comm=MPI.comm_self)
+    top_bexpr    = Expression("c + (d-c)*x[0]", c=c, d=d, degree=1, mpi_comm=MPI.comm_self)
+    right_bexpr  = Expression("b + (d-b)*x[1]", b=b, d=d, degree=1, mpi_comm=MPI.comm_self)
 
     left_bc   = DirichletBC(V, left_bexpr, left)
     right_bc  = DirichletBC(V, right_bexpr, right)
@@ -64,7 +66,7 @@ class PoissonProblem(BLUEProblem):
             sol = Function(V)
 
             D = Constant(exp(samples[i][0]))
-            f = Expression("e*sin(exp(x[0]*x[1])) + (1-e)*exp(3*cos(x[1]+x[0]))", degree=3, e=samples[i][-1]**2)
+            f = Expression("e*sin(exp(x[0]*x[1])) + (1-e)*exp(3*cos(x[1]+x[0]))", degree=3, e=samples[i][-1]**2, mpi_comm=MPI.comm_self)
 
             lhs = inner(D*grad(u), grad(v))*dx + u*v*dx
             rhs = f*v*dx
@@ -111,7 +113,7 @@ def build_test_covariance(string="full"):
 
 C = build_test_covariance("full")
 problem = PoissonProblem(M, C=C, covariance_estimation_samples=50, spg_params={"maxit":10000, "maxfc":10**6, "verbose":False})
-print(problem.get_correlation(), "\n")
+if verbose: print(problem.get_correlation(), "\n")
 
 complexity_test = False
 standard_MC_test = False
@@ -127,8 +129,8 @@ if standard_MC_test:
     problem.setup_solver(K=3, eps=eps, solver="gurobi")
     out = problem.solve()
     out_MC = problem.solve_mc(eps=eps)
-    print("BLUE (mu, err, cost):", out)
-    print("MC   (mu, err, cost):", out_MC)
+    if verbose: print("BLUE (mu, err, cost):", out)
+    if verbose: print("MC   (mu, err, cost):", out_MC)
     sys.exit(0)
 
 if comparison_test:
@@ -138,9 +140,9 @@ if comparison_test:
     out_MFMC = problem.setup_mfmc(budget=budget, eps=eps)
     out      = problem.setup_solver(K=M, budget=budget, eps=eps, solver="cvxpy")
 
-    print("\nMLMC. Error: %f. Total cost: %f." % (out_MLMC[1]["error"], out_MLMC[1]["total_cost"]))
-    print("MFMC. Error: %f. Total cost: %f." % (out_MFMC[1]["error"], out_MFMC[1]["total_cost"]))
-    print("BLUE. Error: %f. Total cost: %f.\n\n" % (out["error"],      out["total_cost"]))
+    if verbose: print("\nMLMC. Error: %f. Total cost: %f." % (out_MLMC[1]["error"], out_MLMC[1]["total_cost"]))
+    if verbose: print("MFMC. Error: %f. Total cost: %f." % (out_MFMC[1]["error"], out_MFMC[1]["total_cost"]))
+    if verbose: print("BLUE. Error: %f. Total cost: %f.\n\n" % (out["error"],      out["total_cost"]))
 
     eps    = 0.25;  budget = None
 
@@ -148,9 +150,9 @@ if comparison_test:
     out_MFMC = problem.setup_mfmc(budget=budget, eps=eps)
     out      = problem.setup_solver(K=M, budget=budget, eps=eps, solver="cvxpy")
 
-    print("\nMLMC. Error: %f. Total cost: %f." % (out_MLMC[1]["error"], out_MLMC[1]["total_cost"]))
-    print("MFMC. Error: %f. Total cost: %f." % (out_MFMC[1]["error"], out_MFMC[1]["total_cost"]))
-    print("BLUE. Error: %f. Total cost: %f." % (out["error"],      out["total_cost"]))
+    if verbose: print("\nMLMC. Error: %f. Total cost: %f." % (out_MLMC[1]["error"], out_MLMC[1]["total_cost"]))
+    if verbose: print("MFMC. Error: %f. Total cost: %f." % (out_MFMC[1]["error"], out_MFMC[1]["total_cost"]))
+    if verbose: print("BLUE. Error: %f. Total cost: %f." % (out["error"],      out["total_cost"]))
 
     sys.exit(0)
 
@@ -158,4 +160,4 @@ problem.setup_solver(K=3, budget=10., solver="cvxpy")
 #problem.setup_solver(K=3, eps=0.1, solver="cvxpy")
 
 out = problem.solve()
-print(out)
+if verbose: print(out)
