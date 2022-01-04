@@ -331,18 +331,24 @@ class BLUEProblem(object):
 
         x = proj(am(C,abs(mask) > 1.0e-14))
         if self.verbose: print("Running Spectral Gradient Descent for Covariance projection...")
-        res = spg(evalf, evalg, proj, x, eps=spg_params["eps"], maxit=spg_params["maxit"], maxfc=spg_params["maxfc"], iprint=spg_params["verbose"] and self.warning, lmbda_min=spg_params["lmbda_min"], lmbda_max=spg_params["lmbda_max"], M=spg_params["linesearch_history_length"])
+        if self.mpiRank == 0:
+            res = spg(evalf, evalg, proj, x, eps=spg_params["eps"], maxit=spg_params["maxit"], maxfc=spg_params["maxfc"], iprint=spg_params["verbose"] and self.warning, lmbda_min=spg_params["lmbda_min"], lmbda_max=spg_params["lmbda_max"], M=spg_params["linesearch_history_length"])
 
-        if res["spginfo"] == 0:
-            if self.verbose: print("Covariance projected, projection error: ", res["f"])
+            if res["spginfo"] == 0:
+                if self.verbose: print("Covariance projected, projection error: ", res["f"])
+            else:
+                raise RuntimeError("Could not find good enough Covariance projection. Solver info:\n%s" % res)
+
+            C_new = res["x"].reshape((self.M, self.M))
+            s = np.sqrt(np.diag(C_new))
+            rho_new = C_new/np.outer(s,s)
+            C_new[abs(rho_new) < 1.0e-7] = np.inf # mark uncorrelated models
+            C_new[np.isnan(C).reshape((self.M, self.M))] = np.nan # keep uncoupled models uncoupled
+
         else:
-            raise RuntimeError("Could not find good enough Covariance projection. Solver info:\n%s" % res)
+            C_new = None
 
-        C_new = res["x"].reshape((self.M, self.M))
-        s = np.sqrt(np.diag(C_new))
-        rho_new = C_new/np.outer(s,s)
-        C_new[abs(rho_new) < 1.0e-7] = np.inf # mark uncorrelated models
-        C_new[np.isnan(C).reshape((self.M, self.M))] = np.nan # keep uncoupled models uncoupled
+        C_new = COMM_WORLD.bcast(C_new, root=0)
 
         for i in range(self.M):
             for j in range(self.M):
