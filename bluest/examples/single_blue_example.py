@@ -8,6 +8,7 @@ import sys
 set_log_level(30)
 
 mpiRank = MPI.rank(MPI.comm_world)
+mpiSize = MPI.size(MPI.comm_world)
 
 verbose = mpiRank == 0
 
@@ -112,12 +113,13 @@ def build_test_covariance(string="full"):
     return C
 
 C = build_test_covariance("full")
-problem = PoissonProblem(M, C=C, covariance_estimation_samples=50, spg_params={"maxit":10000, "maxfc":10**6, "verbose":False})
+problem = PoissonProblem(M, C=C, covariance_estimation_samples=max(mpiSize*50, 50), spg_params={"maxit":10000, "maxfc":10**6, "verbose":False})
 if verbose: print(problem.get_correlation(), "\n")
 
 complexity_test = False
 standard_MC_test = False
 comparison_test = False
+variance_test = True
 
 if complexity_test:
     eps = 2**np.arange(3,8)
@@ -154,6 +156,11 @@ if comparison_test:
     if verbose: print("MFMC. Error: %f. Total cost: %f." % (out_MFMC[1]["error"], out_MFMC[1]["total_cost"]))
     if verbose: print("BLUE. Error: %f. Total cost: %f." % (out["error"],      out["total_cost"]))
 
+    sys.exit(0)
+
+if variance_test:
+    budget = 1.; eps = None
+    err_ex, err = problem.variance_test(budget=budget, eps=eps, K=3, N=100)
     sys.exit(0)
 
 problem.setup_solver(K=3, budget=10., solver="cvxpy")

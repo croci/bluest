@@ -194,7 +194,7 @@ def best_closest_integer_solution_BLUE_multi(sol, psis, w, e, mappings, budget=N
     best_val = val
     best_fval = V_max[i]
 
-    assert all(abs(Vs[n][i] - np.linalg.pinv((psis[n]@best_val[mappings[n]]).reshape((N,N)), hermitian=True, rcond=1.e-10)[0,0]) < 1.0e-12 for n in range(No))
+    assert all(abs(Vs[n][i] - np.linalg.pinv((psis[n]@best_val[mappings[n]]).reshape((N,N)), hermitian=True, rcond=1.e-10)[0,0]) < 1.0e-10 for n in range(No))
 
     return best_val, best_fval
 

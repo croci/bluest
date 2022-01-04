@@ -456,7 +456,7 @@ class BLUEProblem(object):
 
         return which_groups, blue_data
 
-    def solve(self, K=3, budget=None, eps=None, groups=None, multi_groups=None, integer=False, solver=None):
+    def solve(self, K=3, budget=None, eps=None, groups=None, multi_groups=None, integer=False, solver=None, verbose=True):
         if solver is None: solver = self.params["optimization_solver"]
         if self.MOSAP_output is None:
             self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, multi_groups=multi_groups, integer=integer, solver=solver)
@@ -466,7 +466,7 @@ class BLUEProblem(object):
         elif budget is None and eps is None and self.MOSAP_output['cost'] is None: # if cost is not None, then the optimal samples have been found
             raise ValueError("Need to prescribe either a budget or an error tolerance to run the BLUE estimator")
 
-        if self.verbose: print("Sampling BLUE...\n")
+        if self.verbose and verbose: print("Sampling BLUE...\n")
 
         flattened_groups = self.MOSAP_output['flattened_groups']
         sample_list      = self.MOSAP_output['samples']
@@ -477,7 +477,7 @@ class BLUEProblem(object):
                 for n in range(self.n_outputs):
                     sums[n].append([0 for l in range(len(ls))])
                 continue
-            sumse,_,_ = self.blue_fn(ls, N)
+            sumse,_,_ = self.blue_fn(ls, N, verbose=verbose)
             for n in range(self.n_outputs):
                 sums[n].append(sumse[n])
 
@@ -722,7 +722,7 @@ class BLUEProblem(object):
         return mu,errs,tot_cost
 
     def complexity_test(self, eps, K=3):
-        if self.verbose: print("Running cost complexity_test...")
+        if self.verbose: print("Running cost complexity test...")
         tot_cost = []
         for i in range(len(eps)):
             self.setup_solver(K=K, eps=eps[i], solver="cvxpy")
@@ -733,6 +733,40 @@ class BLUEProblem(object):
         if self.verbose: print("Total costs   :", tot_cost)
         if self.verbose: print("Estimated rate:", rate)
         return tot_cost, rate
+
+    def variance_test(self, budget=None, eps=None, K=3, N=50):
+        if budget is None and eps is None:
+            raise ValueError("Need to specify either budget or RMSE tolerance")
+        elif budget is not None and eps is not None:
+            eps = None
+        if eps is not None and isinstance(eps,(int,float,np.int,np.float)): eps = [eps for n in range(self.n_outputs)]
+
+        if self.verbose: print("Running variance test...")
+
+        self.setup_solver(K=K, budget=budget, eps=eps, solver="cvxpy")
+        err_ex = np.sqrt(self.MOSAP_output['variances'])
+        err = np.zeros_like(err_ex)
+
+        inners = self.get_models_inner_products()
+
+        s1 = [0 for n in range(self.n_outputs)]
+        s2 = np.zeros_like(err_ex)
+        for it in range(1,N+1):
+            if self.verbose: print("Sampling estimator %d/%d" % (it,N))
+            mus,_,_ = self.solve(verbose=False)
+            for n in range(self.n_outputs):
+                s1[n] += mus[n]
+                s2[n] += inners[n](mus[n],mus[n])
+
+        for n in range(self.n_outputs):
+            s1[n] = inners[n](s1[n],s1[n])/N**2
+            s2[n] /= N
+            err[n] = np.sqrt(s2[n] - s1[n])
+
+        if self.verbose: print("Theoretical error: ", err_ex)
+        if self.verbose: print("Estimated error:   ", err)
+
+        return err_ex, err
 
 if __name__ == '__main__':
     pass
