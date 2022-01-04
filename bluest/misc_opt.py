@@ -341,22 +341,28 @@ def variance_GH_full(m, psi, groups, sizes, invcovs, delta=0.0, nohess=False):
 def PHIinvY0(m, y, psi, groups, cumsizes, delta=0.0):
     if abs(m).max() < 0.05: return np.inf
 
-    PHI = get_phi(m, psi, delta=delta)
+    PHI = get_phi_full(m, psi, delta=delta)
 
     idx = get_nnz_rows_cols(m,groups,cumsizes)
     PHI = PHI[idx]
-    y   = y[idx[0].flatten()]
+    y   = [y[item] for item in idx[0].flatten()]
 
     assert idx[0].min() == 0 # the model 0 must always be sampled if this triggers something is wrong
 
-    try:
-        mu = np.linalg.solve(PHI,y)[0]
-        var = np.linalg.solve(PHI, np.eye(len(y), 1).flatten())[0]
-    except np.linalg.LinAlgError:
-        assert False # after the above fix we should never get here
-        pinvPHI = np.linalg.pinv(PHI)
-        mu  = (pinvPHI@y)[0]
-        var = pinvPHI[0,0] 
+    pinvPHI = np.linalg.pinv(PHI)
+    var = pinvPHI[0,0]
+    mu = 0
+    for j in range(len(y)):
+        mu += pinvPHI[0,j]*y[j]
+
+    #try:
+    #    mu = np.linalg.solve(PHI,y)[0]
+    #    var = np.linalg.solve(PHI, np.eye(len(y), 1).flatten())[0]
+    #except np.linalg.LinAlgError:
+    #    assert False # after the above fix we should never get here
+    #    pinvPHI = np.linalg.pinv(PHI)
+    #    mu  = pinvPHI[0,:]@y
+    #    var = pinvPHI[0,0] 
 
     return mu, var
 

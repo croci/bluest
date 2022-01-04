@@ -84,6 +84,10 @@ class MultiBLUEProblem(object):
         ''' must be implemented by the user'''
         raise NotImplementedError
 
+    def get_models_inner_products(self):
+        ''' must be overloaded by the user if non-scalar outputs are present'''
+        return [lambda a,b : a*b for n in range(self.n_outputs)]
+
     #################### UTILITY FUNCTIONS #######################
 
     def get_costs(self):
@@ -128,6 +132,18 @@ class MultiBLUEProblem(object):
         C = self.get_covariance(n)
         s = np.sqrt(np.diag(C))
         return C/np.outer(s,s)
+
+    def outer(self, a, b, inner):
+        assert len(a) == len(b)
+        L = len(a)
+
+        out = np.zeros((L,L))
+
+        for i in range(L):
+            for j in range(L):
+                out[i,j] = inner(a[i],b[j])
+
+        return out
 
     #################### GRAPH MANIPULATION #######################
 
@@ -246,7 +262,8 @@ class MultiBLUEProblem(object):
         C = [nx.adjacency_matrix(self.G[n]).toarray() for n in range(self.n_outputs)]
         ls = list(np.where(np.isnan(np.sum(sum(C),1)))[0])
         sumse,sumsc,cost = self.blue_fn(ls, N)
-        C_hat = [sumsc[n]/N - np.outer(sumse[n]/N,sumse[n]/N) for n in range(self.n_outputs)]
+        inners = self.get_models_inner_products()
+        C_hat = [sumsc[n]/N - self.outer(sumse[n],sumse[n],inners[n])/N**2 for n in range(self.n_outputs)]
         for n in range(self.n_outputs):
             for i,j,c in self.G[n].edges(data=True):
                 if np.isnan(c['weight']):
@@ -324,7 +341,7 @@ class MultiBLUEProblem(object):
     #################### SOLVERS #######################
 
     def blue_fn(self, ls, N, verbose=True):
-        return blue_fn(ls, N, self, self.sampler, N1=self.params["sample_batch_size"], No=self.n_outputs, verbose=verbose)
+        return blue_fn(ls, N, self, sampler=self.sampler, inners=self.get_models_inner_products(), N1=self.params["sample_batch_size"], No=self.n_outputs, verbose=verbose)
 
     def setup_solver(self, K=3, budget=None, eps=None, groups=None, multi_groups=None, solver=None, integer=False):
         if budget is None and eps is None: raise ValueError("Need to specify either budget or RMSE tolerance")
@@ -422,11 +439,11 @@ class MultiBLUEProblem(object):
         for ls,N in zip(flattened_groups, sample_list):
             if N == 0:
                 for n in range(self.n_outputs):
-                    sums[n].append(np.zeros_like(ls))
+                    sums[n].append([0 for l in range(len(ls))])
                 continue
             sumse,_,_ = self.blue_fn(ls, N)
             for n in range(self.n_outputs):
-                sums[n].append(sumse[n].copy())
+                sums[n].append(sumse[n])
 
         mus,Vs = self.SAP.compute_BLUE_estimators(sums, sample_list)
         errs = np.sqrt(Vs)
@@ -614,21 +631,23 @@ class MultiBLUEProblem(object):
         print("\nSampling optimal MFMC estimator...\n")
 
         L = len(best_group)
-        y = [np.zeros((L,)) for n in range(self.n_outputs)]
-        y1 = [np.zeros((L-1,)) for n in range(self.n_outputs)]
+        y  = [[0 for i in range(L)] for n in range(self.n_outputs)]
+        y1 = [[0 for i in range(L-1)] for n in range(self.n_outputs)]
         for i in range(L):
             N = samples[i]
             if i > 0: N -= samples[i-1]
             sumse,_,_ = self.blue_fn(best_group[i:], N)
             for n in range(self.n_outputs):
-                y[n][i:] += sumse[n]
-                if i < L-1: y1[n][i:] += sumse[n][1:]
+                for j in range(i,L):
+                    y[n][j] += sumse[n][j-i]
+                    if j < L-1: y1[n][j] += sumse[n][j-i+1]
 
         for n in range(self.n_outputs):
-            y[n]  /= samples
-            y1[n] /= samples[:-1]
+            for i in range(L):
+                y[n][i]  /= samples[i]
+                if i < L-1: y1[n][i] /= samples[i]
 
-        mu = [y[n][0] + sum(alphas[n]*(y[n][1:]-y1[n])) for n in range(self.n_outputs)]
+        mu = [y[n][0] + sum(alphas[n][i]*(y[n][i+1]-y1[n][i]) for i in range(L-1)) for n in range(self.n_outputs)]
 
         return mu, errs, tot_cost
 

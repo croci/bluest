@@ -11,7 +11,7 @@ mpiRank = MPI.rank(MPI.comm_world)
 
 RNG = RandomState(mpiRank)
 
-No = 102
+No = 3
 
 dim = 2 # spatial dimension
 buf = 1
@@ -50,6 +50,9 @@ class PoissonProblem(MultiBLUEProblem):
         sample = RNG.randn(5)/5
         return [sample.copy() for i in range(L)]
 
+    def get_models_inner_products(self):
+        return [lambda a,b: a@b] + [lambda a,b : a*b for i in range(1,No)]
+
     def evaluate(self, ls, samples, N=1):
 
         L = len(ls)
@@ -59,6 +62,8 @@ class PoissonProblem(MultiBLUEProblem):
             if ls[i] > n_levels-1:
                 for n in range(No):
                     out[n][i] = sum(samples[i]**2)
+
+                out[0][i] = np.array([out[0][i], out[0][i]])
                 continue
 
             V = function_spaces[ls[i]]
@@ -78,10 +83,11 @@ class PoissonProblem(MultiBLUEProblem):
 
             solve(lhs == rhs, sol, bcs)
 
-            out[0][i] = assemble(inner(grad(sol),grad(sol))*dx)/100
-            out[1][i] = assemble(exp(sin(sol))*dx)
-            if No > 2:
-                for n in range(2,No):
+            out[0][i] = np.array([sol(0.5,0.5), sol(0.1,0.1)])
+            out[1][i] = assemble(inner(grad(sol),grad(sol))*dx)/100
+            out[2][i] = assemble(exp(sin(sol))*dx)
+            if No > 3:
+                for n in range(3,No):
                     out[n][i] = sol(Point(x[n-2],x[n-2]))
 
         return out
@@ -123,7 +129,7 @@ print(problem.get_correlation(), "\n")
 
 complexity_test = False
 standard_MC_test = False
-comparison_test = True
+comparison_test = False
 
 if complexity_test:
     eps = 2**np.arange(3,8)
@@ -131,7 +137,7 @@ if complexity_test:
     sys.exit(0)
 
 if standard_MC_test:
-    eps = 0.1
+    eps = 0.005
     problem.setup_solver(K=3, eps=eps, solver="cvxpy")
     out = problem.solve()
     out_MC = problem.solve_mc(eps=eps)
@@ -165,4 +171,5 @@ if comparison_test:
 problem.setup_solver(K=3, budget=10, solver="cvxpy")
 #problem.setup_solver(K=3, eps=0.025, solver="cvxpy")
 
-#out = problem.solve()
+out = problem.solve()
+print(out)

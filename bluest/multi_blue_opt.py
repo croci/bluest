@@ -88,7 +88,7 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
 
         #sums_list = [[sums[item] for item in self.mappings[n]] for n in range(self.n_outputs)]
         #out  = [self.SAPS[n].compute_BLUE_estimator(sums[self.mappings[n]]) for n in range(self.n_outputs)]
-        mus  = np.array([item[0] for item in out])
+        mus  = [item[0] for item in out]
         Vars = np.array([item[1] for item in out])
         return mus,Vars
 

@@ -75,7 +75,7 @@ class BLUESampleAllocationProblem(object):
 
         if samples is None: samples = self.samples
 
-        y = np.zeros((L,))
+        y = [0 for i in range(L)]
         sums = [sums[cumsizes[k]:cumsizes[k+1]] for k in range(K)]
         for k in range(1, K+1):
             for i in range(sizes[k]):

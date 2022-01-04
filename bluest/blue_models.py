@@ -23,9 +23,8 @@ default_params = {
                     "spg_params" : spg_default_params,
                     }
 
-# Are any checks on the correlation matrix necessary?
 class BLUEProblem(object):
-    def __init__(self, M, C=None, costs=None, n_outputs=1, **params):
+    def __init__(self, M, C=None, costs=None, **params):
         '''
             INPUT:
 
@@ -40,7 +39,6 @@ class BLUEProblem(object):
             - params is a dictionary containing optional parameters (see default in self.default_params)
         '''
         self.M = M
-        self.n_outputs = n_outputs
 
         if C is None: C = np.nan*np.ones((M,M))
 
