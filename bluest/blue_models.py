@@ -1,6 +1,7 @@
 import numpy as np
 import networkx as nx
 from itertools import combinations
+from mpi4py.MPI import COMM_WORLD
 from .blue_fn import blue_fn
 from .mosap import MOSAP
 from .misc import attempt_mlmc_setup,attempt_mfmc_setup
@@ -17,6 +18,7 @@ spg_default_params = {"maxit" : 200,
                      }
 
 default_params = {
+                    "verbose" : True,
                     "remove_uncorrelated" : True,
                     "optimization_solver" : "cvxpy",
                     "covariance_estimation_samples" : 100,
@@ -59,6 +61,9 @@ class BLUEProblem(object):
         spg_params.update(params.get("spg_params", {}))
         params["spg_params"] = spg_params
         self.params.update(params)
+        
+        self.mpiRank = COMM_WORLD.Get_rank()
+        self.verbose = self.params["verbose"] and self.mpiRank == 0
 
         self.G = [self.get_model_graph(C[n], costs=costs) for n in range(n_outputs)]
         self.SG = [list(range(M)) for n in range(n_outputs)]
@@ -71,7 +76,7 @@ class BLUEProblem(object):
 
         self.check_graphs(remove_uncorrelated=self.params["remove_uncorrelated"])
 
-        print("BLUE estimator ready.\n")
+        if self.verbose: print("BLUE estimator ready.\n")
 
     #################### FUNCTIONS TO BE OVERLOADED #######################
 
@@ -82,12 +87,22 @@ class BLUEProblem(object):
     
     #NOTE: N here is the number of samples to be taken per time
     def sampler(self, ls, N=1):
-        ''' must be implemented by the user'''
+        ''' must be implemented by the user. If MPI is used this must be thread-safe'''
         raise NotImplementedError
 
     def get_models_inner_products(self):
         ''' must be overloaded by the user if non-scalar outputs are present'''
         return [lambda a,b : a*b for n in range(self.n_outputs)]
+
+    def get_comm(self):
+        '''
+            must be overloaded by the user if MPI is also used by the sampling
+            function. In this case this function must return the MPI communicator
+            between the MPI sub-groups. If MPI is not used by the sampling function
+            then the sub-groups are MPI_COMM_SELF and this function must return
+            MPI_COMM_WORLD.
+        '''
+        return COMM_WORLD
 
     #################### UTILITY FUNCTIONS #######################
 
@@ -105,7 +120,7 @@ class BLUEProblem(object):
             more_expensive_models = [self.G[0].nodes[i]["model_number"] for i in costs[costs > costs[0]]]
             message_error = "Model zero is not the most expensive model. Consider removing the more expensive models %s" % more_expensive_models
             message_warning = "WARNING! Model zero is not the most expensive model and some estimators won't run in this setting. The more expensive models are: %s" % more_expensive_models
-            if warning: print(message_warning)
+            if warning and self.mpiRank == 0: print(message_warning)
             else: raise ValueError(message_error)
 
     def get_covariances(self):
@@ -221,7 +236,7 @@ class BLUEProblem(object):
         if not nx.is_connected(self.G[n]):
             comp = nx.node_connected_component(self.G[n], 0)
             self.SG[n] = comp
-            print("WARNING! Model graph %d is not connected. Connected graph size: %d" % (n,len(comp)))
+            if self.mpiRank == 0: print("WARNING! Model graph %d is not connected. Connected graph size: %d" % (n,len(comp)))
             #print("WARNING! Model graph is not connected, pruning disconnected subgraph...")
             #SG = self.G.subgraph(comp).copy()
             #SG = nx.convert_node_labels_to_integers(SG)
@@ -259,7 +274,7 @@ class BLUEProblem(object):
     #################### COVARIANCE AND COST ESTIMATORS #######################
 
     def estimate_missing_covariances(self, N):
-        print("Covariance estimation with %d samples..." % N)
+        if self.verbose: print("Covariance estimation with %d samples..." % N)
         C = [nx.adjacency_matrix(self.G[n]).toarray() for n in range(self.n_outputs)]
         ls = list(np.where(np.isnan(np.sum(sum(C),1)))[0])
         sumse,sumsc,cost = self.blue_fn(ls, N)
@@ -308,10 +323,10 @@ class BLUEProblem(object):
             return am(x - C, mask**2) + gamma*am(x, invmask**2)
 
         x = proj(am(C,abs(mask) > 1.0e-14))
-        print("Running Spectral Gradient Descent for Covariance projection...")
-        res = spg(evalf, evalg, proj, x, eps=spg_params["eps"], maxit=spg_params["maxit"], maxfc=spg_params["maxfc"], iprint=spg_params["verbose"], lmbda_min=spg_params["lmbda_min"], lmbda_max=spg_params["lmbda_max"], M=spg_params["linesearch_history_length"])
+        if self.verbose: print("Running Spectral Gradient Descent for Covariance projection...")
+        res = spg(evalf, evalg, proj, x, eps=spg_params["eps"], maxit=spg_params["maxit"], maxfc=spg_params["maxfc"], iprint=spg_params["verbose"] and self.mpiRank == 0, lmbda_min=spg_params["lmbda_min"], lmbda_max=spg_params["lmbda_max"], M=spg_params["linesearch_history_length"])
 
-        if res["spginfo"] == 0:
+        if res["spginfo"] == 0 and self.verbose:
             print("Covariance projected, projection error: ", res["f"])
         else:
             raise RuntimeError("Could not find good enough Covariance projection. Solver info:\n%s" % res)
@@ -333,7 +348,7 @@ class BLUEProblem(object):
                     self.G[n][i][j]['weight'] = C_new[i,j]
 
     def estimate_costs(self, N=2):
-        print("Cost estimation via sampling...")
+        if self.verbose: print("Cost estimation via sampling...")
         for l in range(self.M):
             _,_,cost = self.blue_fn([l], N, verbose=False)
             for n in range(self.n_outputs):
@@ -402,7 +417,7 @@ class BLUEProblem(object):
         costs = self.get_group_costs(groups)
         multi_costs = [self.get_group_costs(item) for item in multi_groups]
 
-        print("Computing optimal sample allocation...")
+        if self.verbose: print("Computing optimal sample allocation...")
         self.MOSAP = MOSAP(C, K, Ks, groups, multi_groups, costs, multi_costs)
         self.MOSAP.solve(budget=budget, eps=eps, solver=solver, integer=integer)
 
@@ -410,12 +425,12 @@ class BLUEProblem(object):
         cost_BLUE = self.MOSAP.samples@costs
         N_MC = max(C[n][0,0]/Vs[n] for n in range(self.n_outputs))
         cost_MC = N_MC*costs[0] 
-        print("\nBLUE cost: ", cost_BLUE, "MC cost: ", cost_MC, "Savings: ", cost_MC/cost_BLUE)
+        if self.verbose: print("\nBLUE cost: ", cost_BLUE, "MC cost: ", cost_MC, "Savings: ", cost_MC/cost_BLUE)
 
         # FIXME: flattened groups will be the union between all the possible groups selected above
         which_groups = [self.MOSAP.flattened_groups[item] for item in np.argwhere(self.MOSAP.samples > 0).flatten()]
-        print("\nModel groups selected: %s\n" % which_groups)
-        print("BLUE estimator setup. Max error: ", np.sqrt(max(Vs)), " Cost: ", cost_BLUE, "\n")
+        if self.verbose: print("\nModel groups selected: %s\n" % which_groups)
+        if self.verbose: print("BLUE estimator setup. Max error: ", np.sqrt(max(Vs)), " Cost: ", cost_BLUE, "\n")
 
         blue_data = {"samples" : self.MOSAP.samples, "errors" : np.sqrt(Vs), "total_cost" : cost_BLUE}
 
@@ -431,7 +446,7 @@ class BLUEProblem(object):
         elif budget is None and eps is None and self.MOSAP.samples is None:
             raise ValueError("Need to prescribe either a budget or an error tolerance to run the BLUE estimator")
 
-        print("Sampling BLUE...\n")
+        if self.verbose: print("Sampling BLUE...\n")
 
         flattened_groups = self.MOSAP.flattened_groups
         sample_list      = self.MOSAP.samples
@@ -468,7 +483,7 @@ class BLUEProblem(object):
         idx = np.argsort(w)[::-1]
         assert idx[0] == 0
 
-        print("Setting up optimal MLMC estimator...\n") 
+        if self.verbose: print("Setting up optimal MLMC estimator...\n") 
 
         # get all groups that incude model 0 and are feasible for MLMC with models ordered by cost
         GG = nx.intersection_all(self.G)
@@ -528,7 +543,7 @@ class BLUEProblem(object):
         errs = [np.sqrt(mlmc_data["variance"](samples)) for mlmc_data in best_data]
 
         mlmc_data = {"samples" : samples, "errors" : errs, "total_cost" : cost}
-        print("Best MLMC estimator found. Coupled models:", best_group, " Max error: ", max(errs), " Cost: ", cost, "\n")
+        if self.verbose: print("Best MLMC estimator found. Coupled models:", best_group, " Max error: ", max(errs), " Cost: ", cost, "\n")
         return best_group, mlmc_data
 
     def solve_mlmc(self, budget=None, eps=None):
@@ -543,7 +558,7 @@ class BLUEProblem(object):
         errs      = mlmc_data["errors"]
         tot_cost = mlmc_data["total_cost"]
 
-        print("\nSampling optimal MLMC estimator...\n")
+        if self.verbose: print("\nSampling optimal MLMC estimator...\n")
 
         L = len(best_group)
         groups = [item for item in zip(best_group[:-1],best_group[1:])] + [[best_group[-1]]]
@@ -569,7 +584,7 @@ class BLUEProblem(object):
         rhos = [self.get_correlation(n)[0,:] for n in range(self.n_outputs)]
         w = self.get_costs()
 
-        print("Setting up optimal MFMC estimator...\n") 
+        if self.verbose: print("Setting up optimal MFMC estimator...\n") 
 
         GG = nx.intersection_all(self.G)
 
@@ -613,7 +628,7 @@ class BLUEProblem(object):
 
         alphas = [mfmc_data["alphas"] for mfmc_data in best_data]
         mfmc_data = {"samples" : samples, "errors" : errs, "total_cost" : cost, "alphas" : alphas}
-        print("Best MFMC estimator found. Coupled models:", best_group, " Max error: ", errs, " Cost: ", cost, "\n")
+        if self.verbose: print("Best MFMC estimator found. Coupled models:", best_group, " Max error: ", errs, " Cost: ", cost, "\n")
         return best_group, mfmc_data
 
     def solve_mfmc(self, budget=None, eps=None):
@@ -629,7 +644,7 @@ class BLUEProblem(object):
         tot_cost = mfmc_data["total_cost"]
         alphas   = mfmc_data["alphas"]
 
-        print("\nSampling optimal MFMC estimator...\n")
+        if self.verbose: print("\nSampling optimal MFMC estimator...\n")
 
         L = len(best_group)
         y  = [[0 for i in range(L)] for n in range(self.n_outputs)]
@@ -671,16 +686,16 @@ class BLUEProblem(object):
             tot_cost = N_MC*cost
             errs = np.sqrt(Vs/N_MC)
 
-        print("Standard MC estimator ready. Max error: ", max(errs), "Cost: ", tot_cost)
+        if self.verbose: print("Standard MC estimator ready. Max error: ", max(errs), "Cost: ", tot_cost)
 
-        print("\nSampling standard MC estimator...\n")
+        if self.verbose: print("\nSampling standard MC estimator...\n")
         sumse,_,_ = self.blue_fn([0], N_MC)
         mu = [sumse[n][0]/N_MC for n in range(self.n_outputs)]
 
         return mu,errs,tot_cost
 
     def complexity_test(self, eps, K=3):
-        print("Running cost complexity_test...")
+        if self.verbose: print("Running cost complexity_test...")
         tot_cost = []
         for i in range(len(eps)):
             self.setup_solver(K=K, eps=eps[i], solver="cvxpy")
@@ -688,8 +703,8 @@ class BLUEProblem(object):
             tot_cost.append(sum(self.MOSAP.samples*self.MOSAP.costs))
         tot_cost = np.array(tot_cost)
         rate = np.polyfit(np.arange(len(tot_cost)), np.log2(tot_cost), 1)[0]
-        print("Total costs   :", tot_cost)
-        print("Estimated rate:", rate)
+        if self.verbose: print("Total costs   :", tot_cost)
+        if self.verbose: print("Estimated rate:", rate)
         return tot_cost, rate
 
 if __name__ == '__main__':
