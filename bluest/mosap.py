@@ -1,12 +1,13 @@
 import numpy as np
 from itertools import combinations, product
-from .blue_opt import BLUESampleAllocationProblem,mosek_params
-from .misc_opt import best_closest_integer_solution_BLUE_multi
+from .sap import SAP,mosek_params
+from .misc import best_closest_integer_solution_BLUE_multi
 
 import cvxpy as cp
 from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds
 
-class BLUEMultiObjectiveSampleAllocationProblem(object):
+class MOSAP(object):
+    ''' MOSAP, MultiObjectiveSampleAllocationProblem '''
     def __init__(self, C, K, Ks, groups, multi_groups, costs, multi_costs):
 
         self.n_outputs = len(C)
@@ -25,7 +26,7 @@ class BLUEMultiObjectiveSampleAllocationProblem(object):
         self.flattened_groups = flattened_groups
         self.groups = groups
 
-        self.SAPS = [BLUESampleAllocationProblem(C[n], Ks[n], multi_groups[n], multi_costs[n]) for n in range(self.n_outputs)]
+        self.SAPS = [SAP(C[n], Ks[n], multi_groups[n], multi_costs[n]) for n in range(self.n_outputs)]
 
         self.sizes = [0] + [len(groupsk) for groupsk in groups]
         self.cumsizes = np.cumsum(self.sizes)
@@ -310,7 +311,7 @@ if __name__ == '__main__':
 
     print("Problem size: ", L)
 
-    problem = BLUESampleAllocationProblem(C, KK, groups, costs)
+    problem = SAP(C, KK, groups, costs)
 
     scipy_sol,cvxpy_sol,gurobi_sol = None,None,None
     cvxpy_sol  = problem.solve(budget=budget, solver="cvxpy")

@@ -11,15 +11,11 @@ mpiRank = MPI.rank(MPI.comm_world)
 
 RNG = RandomState(mpiRank)
 
-No = 3
-
 dim = 2 # spatial dimension
 buf = 1
 n_levels  = 6
 
 meshes = [RectangleMesh(MPI.comm_self, Point(0,0), Point(1,1), 2**l, 2**l) for l in range(buf, n_levels+buf)][::-1]
-
-if No > 2: x = np.linspace(0.1,0.9, No-2) # if close to the boundary var = 0
 
 function_spaces = [FunctionSpace(mesh, 'CG', 1) for mesh in meshes]
 
@@ -50,20 +46,14 @@ class PoissonProblem(BLUEProblem):
         sample = RNG.randn(5)/5
         return [sample.copy() for i in range(L)]
 
-    def get_models_inner_products(self):
-        return [lambda a,b: a@b] + [lambda a,b : a*b for i in range(1,No)]
-
     def evaluate(self, ls, samples, N=1):
 
         L = len(ls)
-        out = [[0 for i in range(L)]  for n in range(No)]
+        out = [0 for i in range(L)]
 
         for i in range(L):
             if ls[i] > n_levels-1:
-                for n in range(No):
-                    out[n][i] = sum(samples[i]**2)
-
-                out[0][i] = np.array([out[0][i], out[0][i]])
+                out[i] = sum(samples[i]**2)
                 continue
 
             V = function_spaces[ls[i]]
@@ -83,14 +73,10 @@ class PoissonProblem(BLUEProblem):
 
             solve(lhs == rhs, sol, bcs)
 
-            out[0][i] = np.array([sol(0.5,0.5), sol(0.1,0.1)])
-            out[1][i] = assemble(inner(grad(sol),grad(sol))*dx)/100
-            out[2][i] = assemble(exp(sin(sol))*dx)
-            if No > 3:
-                for n in range(3,No):
-                    out[n][i] = sol(Point(x[n-2],x[n-2]))
+            out[i] = assemble(inner(grad(sol),grad(sol))*dx)
+            #out[i] = assemble(exp(sin(sol))*dx)
 
-        return out
+        return [out]
 
 M = n_levels + 1
 
@@ -123,8 +109,8 @@ def build_test_covariance(string="full"):
     else: pass
     return C
 
-C = [build_test_covariance("full") for n in range(No)]
-problem = PoissonProblem(M, C=C, n_outputs=No, covariance_estimation_samples=50, spg_params={"maxit":10000, "maxfc":10**6, "verbose":False})
+C = build_test_covariance("full")
+problem = PoissonProblem(M, C=C, covariance_estimation_samples=50, spg_params={"maxit":10000, "maxfc":10**6, "verbose":False})
 print(problem.get_correlation(), "\n")
 
 complexity_test = False
@@ -137,8 +123,8 @@ if complexity_test:
     sys.exit(0)
 
 if standard_MC_test:
-    eps = 0.005
-    problem.setup_solver(K=3, eps=eps, solver="cvxpy")
+    eps = 0.1
+    problem.setup_solver(K=3, eps=eps, solver="gurobi")
     out = problem.solve()
     out_MC = problem.solve_mc(eps=eps)
     print("BLUE (mu, err, cost):", out)
@@ -152,24 +138,24 @@ if comparison_test:
     out_MFMC = problem.setup_mfmc(budget=budget, eps=eps)
     out      = problem.setup_solver(K=M, budget=budget, eps=eps, solver="cvxpy")
 
-    print("\nMLMC. Errors: %s. Total cost: %f." % (out_MLMC[1]["errors"], out_MLMC[1]["total_cost"]))
-    print("MFMC. Errors: %s. Total cost: %f." % (out_MFMC[1]["errors"],   out_MFMC[1]["total_cost"]))
-    print("BLUE. Errors: %s. Total cost: %f.\n\n" % (out[1]["errors"],    out[1]["total_cost"]))
+    print("\nMLMC. Error: %f. Total cost: %f." % (out_MLMC[1]["error"], out_MLMC[1]["total_cost"]))
+    print("MFMC. Error: %f. Total cost: %f." % (out_MFMC[1]["error"], out_MFMC[1]["total_cost"]))
+    print("BLUE. Error: %f. Total cost: %f.\n\n" % (out["error"],      out["total_cost"]))
 
-    eps = 0.025;  budget = None
+    eps    = 0.25;  budget = None
 
     out_MLMC = problem.setup_mlmc(budget=budget, eps=eps)
     out_MFMC = problem.setup_mfmc(budget=budget, eps=eps)
     out      = problem.setup_solver(K=M, budget=budget, eps=eps, solver="cvxpy")
 
-    print("\nMLMC. Errors: %s. Total cost: %f." % (out_MLMC[1]["errors"], out_MLMC[1]["total_cost"]))
-    print("MFMC. Errors: %s. Total cost: %f." % (out_MFMC[1]["errors"],   out_MFMC[1]["total_cost"]))
-    print("BLUE. Errors: %s. Total cost: %f." % (out[1]["errors"],        out[1]["total_cost"]))
+    print("\nMLMC. Error: %f. Total cost: %f." % (out_MLMC[1]["error"], out_MLMC[1]["total_cost"]))
+    print("MFMC. Error: %f. Total cost: %f." % (out_MFMC[1]["error"], out_MFMC[1]["total_cost"]))
+    print("BLUE. Error: %f. Total cost: %f." % (out["error"],      out["total_cost"]))
 
     sys.exit(0)
 
-problem.setup_solver(K=3, budget=10, solver="cvxpy")
-#problem.setup_solver(K=3, eps=0.025, solver="cvxpy")
+problem.setup_solver(K=3, budget=10., solver="cvxpy")
+#problem.setup_solver(K=3, eps=0.1, solver="cvxpy")
 
 out = problem.solve()
 print(out)

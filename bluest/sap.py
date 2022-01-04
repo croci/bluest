@@ -4,14 +4,11 @@ from itertools import combinations
 import cvxpy as cp
 from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds
 
-try: from .misc_opt import assemble_psi,get_phi_full,variance_full,variance_GH_full,PHIinvY0,best_closest_integer_solution_BLUE
+try: from .misc import assemble_psi,get_phi_full,variance_full,variance_GH_full,PHIinvY0,best_closest_integer_solution_BLUE
 except ImportError:
-    from misc_opt import assemble_psi,get_phi_full,variance_full,variance_GH_full,PHIinvY0,best_closest_integer_solution_BLUE
+    from misc import assemble_psi,get_phi_full,variance_full,variance_GH_full,PHIinvY0,best_closest_integer_solution_BLUE
 
 ########################################################
-#NOTE: the m@e >= 1 constraint is only needed to avoid arbitrarily small
-#      positive values of m. Note that it does not affect the BLUE since
-#      it is a constraint satisfied automatically by the integer formulation 
 
 # MOSEK is suboptimal for some reason
 # SCS does not converge
@@ -26,7 +23,7 @@ mosek_params = {
 
 ########################################################
 
-class BLUESampleAllocationProblem(object):
+class SAP(object):
     def __init__(self, C, K, groups, costs):
 
         self.C = C
@@ -310,7 +307,7 @@ if __name__ == '__main__':
 
     print("Problem size: ", L)
 
-    problem = BLUESampleAllocationProblem(C, KK, groups, costs)
+    problem = SAP(C, KK, groups, costs)
 
     scipy_sol,cvxpy_sol,gurobi_sol = None,None,None
     if False:
