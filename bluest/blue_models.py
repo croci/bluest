@@ -82,7 +82,7 @@ class BLUEProblem(object):
 
         self.check_graphs(remove_uncorrelated=self.params["remove_uncorrelated"])
 
-        if self.verbose: print("BLUE estimator ready.\n")
+        if self.verbose: print("\nBLUE estimator ready.\n")
 
     #################### FUNCTIONS TO BE OVERLOADED #######################
 
@@ -475,7 +475,7 @@ class BLUEProblem(object):
         elif budget is None and eps is None and self.MOSAP_output['cost'] is None: # if cost is not None, then the optimal samples have been found
             raise ValueError("Need to prescribe either a budget or an error tolerance to run the BLUE estimator")
 
-        if self.verbose and verbose: print("Sampling BLUE...\n")
+        if self.verbose and verbose: print("\nSampling BLUE...\n")
 
         flattened_groups = self.MOSAP_output['flattened_groups']
         sample_list      = self.MOSAP_output['samples']
