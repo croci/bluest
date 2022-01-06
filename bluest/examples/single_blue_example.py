@@ -119,7 +119,7 @@ if verbose: print(problem.get_correlation(), "\n")
 complexity_test = False
 standard_MC_test = False
 comparison_test = False
-variance_test = True
+variance_test = False
 
 if complexity_test:
     eps = 2**np.arange(3,8)
@@ -163,8 +163,8 @@ if variance_test:
     err_ex, err = problem.variance_test(budget=budget, eps=eps, K=3, N=100)
     sys.exit(0)
 
-problem.setup_solver(K=3, budget=10., solver="cvxpy")
-#problem.setup_solver(K=3, eps=0.1, solver="cvxpy")
+#problem.setup_solver(K=3, budget=10., solver="cvxpy")
+problem.setup_solver(K=3, eps=0.1, solver="cvxpy")
 
 out = problem.solve()
 if verbose: print(out)

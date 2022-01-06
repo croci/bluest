@@ -8,8 +8,8 @@ from .misc import attempt_mlmc_setup,attempt_mfmc_setup
 from .layered_network_graph import LayeredNetworkGraph
 from .spg import spg
 
-spg_default_params = {"maxit" : 200,
-                      "maxfc" : 200**2,
+spg_default_params = {"maxit" : 500,
+                      "maxfc" : 500**2,
                       "verbose" : False,
                       "eps"     : 1.0e-4,
                       "lmbda_min" : 10.**-30,
@@ -311,11 +311,11 @@ class BLUEProblem(object):
         gamma = 0.0
 
         # projection onto SPD matrices
-        def proj(X):
+        def proj(X, eps=1e-10):
             l = int(np.sqrt(len(X)).round())
             X = X.reshape((l,l))
             l,V = np.linalg.eigh((X + X.T)/2)
-            l[l<0] = 0
+            l[l<eps] = eps
             return (V@np.diag(l)@V.T).flatten()
 
         def am(C,mask):
@@ -432,16 +432,25 @@ class BLUEProblem(object):
 
         if self.verbose: print("Computing optimal sample allocation...")
         if self.mpiRank == 0:
-            self.MOSAP = MOSAP(C, K, Ks, groups, multi_groups, costs, multi_costs)
-            self.MOSAP.solve(budget=budget, eps=eps, solver=solver, integer=integer)
+            if eps is not None:
+                CC = [c/e**2 for c,e in zip(C,eps)]
+                self.MOSAP = MOSAP(CC, K, Ks, groups, multi_groups, costs, multi_costs)
+                self.MOSAP.solve(eps=np.ones_like(eps), solver=solver, integer=integer)
 
-            Vs = self.MOSAP.variances(self.MOSAP.samples)
+                Vs = self.MOSAP.variances(self.MOSAP.samples)
+                Vs = np.array([e**2*v for e,v in zip(eps, Vs)])
+
+            else:
+                self.MOSAP = MOSAP(C, K, Ks, groups, multi_groups, costs, multi_costs)
+                self.MOSAP.solve(budget=budget, solver=solver, integer=integer)
+                Vs = self.MOSAP.variances(self.MOSAP.samples)
+
             cost_BLUE = self.MOSAP.tot_cost
             N_MC = max(C[n][0,0]/Vs[n] for n in range(self.n_outputs))
             cost_MC = N_MC*costs[0] 
             if self.verbose: print("\nBLUE cost: ", cost_BLUE, "MC cost: ", cost_MC, "Savings: ", cost_MC/cost_BLUE)
 
-            self.MOSAP_output = {'budget' : self.MOSAP.budget, 'eps' : self.MOSAP.eps, 'samples' : self.MOSAP.samples, 'flattened_groups' : self.MOSAP.flattened_groups, 'variances' : Vs, 'cost' : cost_BLUE}
+            self.MOSAP_output = {'budget' : budget, 'eps' : eps, 'samples' : self.MOSAP.samples, 'flattened_groups' : self.MOSAP.flattened_groups, 'variances' : Vs, 'cost' : cost_BLUE}
         else:
             self.MOSAP_output = None
 
@@ -588,7 +597,7 @@ class BLUEProblem(object):
         if self.verbose: print("\nSampling optimal MLMC estimator...\n")
 
         L = len(best_group)
-        groups = [item for item in zip(best_group[:-1],best_group[1:])] + [[best_group[-1]]]
+        groups = [list(item) for item in zip(best_group[:-1],best_group[1:])] + [[best_group[-1]]]
         mu = [0 for n in range(self.n_outputs)]
         for i in range(L):
             N = samples[i]
