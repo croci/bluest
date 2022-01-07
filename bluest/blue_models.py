@@ -53,9 +53,6 @@ class BLUEProblem(object):
         self.M = M
         self.n_outputs = n_outputs
 
-        if C is None: C = [np.nan*np.ones((M,M)) for n in range(n_outputs)]
-        if not isinstance(C,(list,tuple)): C = [C]
-
         self.MOSAP = None
         self.MOSAP_output = None
 
@@ -71,16 +68,23 @@ class BLUEProblem(object):
         self.warning = self.mpiRank == 0
         self.verbose = self.params["verbose"] and self.warning
 
-        self.G = [self.get_model_graph(C[n], costs=costs) for n in range(n_outputs)]
-        self.SG = [list(range(M)) for n in range(n_outputs)]
+        if C is None: C = [np.nan*np.ones((M,M)) for n in range(n_outputs)]
 
-        if costs is None: self.estimate_costs(2*self.get_comm().Get_size())
-        self.check_costs(warning=True) # Sending a warning just in case
-        
-        self.estimate_missing_covariances(next_divisible_number(self.params["covariance_estimation_samples"], self.mpiSize))
-        self.project_covariances()
+        if isinstance(C,str):
+            self.load_graph_data(C)
+        else:
+            if not isinstance(C,(list,tuple)): C = [C]
 
-        self.check_graphs(remove_uncorrelated=self.params["remove_uncorrelated"])
+            self.G = [self.get_model_graph(C[n], costs=costs) for n in range(n_outputs)]
+            self.SG = [list(range(M)) for n in range(n_outputs)]
+
+            if costs is None: self.estimate_costs(2*self.get_comm().Get_size())
+            self.check_costs(warning=True) # Sending a warning just in case
+            
+            self.estimate_missing_covariances(next_divisible_number(self.params["covariance_estimation_samples"], self.mpiSize))
+            self.project_covariances()
+
+            self.check_graphs(remove_uncorrelated=self.params["remove_uncorrelated"])
 
         if self.verbose: print("\nBLUE estimator ready.\n")
 
@@ -227,6 +231,34 @@ class BLUEProblem(object):
             G.nodes[l]['model_number'] = l
 
         return G
+
+    def save_graph_data(self, filename):
+        if self.mpiRank == 0:
+            C_dict = {"C%d" % n : nx.adjacency_matrix(self.G[n]).toarray() for n in range(self.n_outputs)}
+            costs = self.get_costs()
+            np.savez(filename, M = self.M, n_outputs = self.n_outputs, costs=costs, **C_dict, SG=self.SG)
+
+    def load_graph_data(self, filename):
+        if self.mpiRank == 0:
+            data = dict(np.load(filename))
+        else:
+            data = None
+
+        data = COMM_WORLD.bcast(data, root=0)
+
+        if self.M != int(data["M"]) or self.n_outputs != int(data["n_outputs"]):
+            raise ValueError("Loaded data number of models and/or number of outputs mismatch with the user-given values")
+
+        self.G = []
+        for n in range(self.n_outputs):
+            GG = nx.from_numpy_matrix(data["C%d" % n])
+            for l in range(self.M):
+                GG.nodes[l]['cost'] = data["costs"][l]
+                GG.nodes[l]['model_number'] = l
+
+            self.G.append(GG)
+
+        self.SG = data["SG"].tolist()
 
     def check_graphs(self, remove_uncorrelated=False):
         for n in range(self.n_outputs):

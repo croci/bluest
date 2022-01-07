@@ -2,3 +2,8 @@ __pycache__
 *.pyc
 *egg-info
 *.swp
+*.msh
+*.h5
+*.vtk
+*.vtu
+*.xdmf

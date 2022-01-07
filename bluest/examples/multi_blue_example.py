@@ -133,7 +133,7 @@ if verbose: print(problem.get_correlation(), "\n")
 complexity_test = False
 standard_MC_test = False
 comparison_test = False
-variance_test = True
+variance_test = False
 
 if complexity_test:
     eps = 2**np.arange(3,8)
