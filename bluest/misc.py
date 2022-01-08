@@ -93,9 +93,10 @@ def check_solution(item, ss, bnds, idx, constr, obj):
 
 def get_feasible_integer_bounds(sol, N, e=None):
     L = len(sol)
-    val = np.sort(sol)[-int(1.2*N):][0] # you need to take at least -1*N or it will cause trouble to MLMC and MFMC routines
+    #val = np.sort(sol)[-int(1.2*N):][0] # you need to take at least -1*N or it will cause trouble to MLMC and MFMC routines
+    idx = np.argsort(sol)[-int(1.2*N):] # you need to take at least -1*N or it will cause trouble to MLMC and MFMC routines
     ss = np.round(sol).astype(int)
-    idx = np.argwhere(sol >= val).flatten()
+    #idx = np.argwhere(sol >= val).flatten()
     if e is not None:
         if sum(e > 0.99) == 0:
             val = 1/sum(e)/2
@@ -126,17 +127,63 @@ def unpackbits(x, num_bits):
     return (x & mask).astype(bool).astype(np.uint8).reshape(xshape + [num_bits])
 
 def best_closest_integer_solution_BLUE_multi(sol, psis, w, e, mappings, budget=None, eps=None):
-    from functools import reduce
     
     No = len(mappings)
 
     N = int(round(np.sqrt(psis[0].shape[0])))
 
-    lb,ub,idx = get_feasible_integer_bounds(sol, N, e=e)
+    lb_full,ub_full,idx_full = get_feasible_integer_bounds(sol, N, e=e)
+
+    LL = len(idx_full)
+
+    LL_max = 15
+
+    if LL <= LL_max:
+        best_val, best_fval = best_closest_integer_solution_BLUE_multi_helper(sol, psis, w, e, mappings, budget, eps, lb_full, ub_full, idx_full)
+
+    else:
+        print('WARNING! Too many dimensions to brute-force it. Randomising search. Note: result might not be optimal.')
+        best_val = None; best_fval = np.inf
+        trial = 0
+        while best_val is None and trial < 1000:
+            trial += 1
+            print("Randomisation n %d." % trial)
+
+            sample = np.random.permutation(LL)
+            brute_force = sample[:LL_max]
+            random_choice = sample[LL_max:]
+
+            idx = idx_full[brute_force]
+            lb  = lb_full[brute_force]
+            ub  = ub_full[brute_force]
+
+            LR = LL-LL_max
+            r_idx = idx_full[random_choice]
+            r_lb  = lb_full[random_choice]
+            r_ub  = ub_full[random_choice]
+            r_sol = sol.copy()
+            r_bnds = np.vstack([r_lb,r_ub])
+            ee = np.ones((LR,), dtype=bool)
+            comb = np.random.randint(2, size=LR)
+            r_sol[r_idx] = r_bnds[comb, ee].T
+
+            best_val, best_fval = best_closest_integer_solution_BLUE_multi_helper(r_sol, psis, w, e, mappings, budget, eps, lb, ub, idx)
+
+        if trial >= 100 and best_val is None:
+            raise RuntimeError("Unable to find feasible integer solution.")
+
+        print("Success!")
+
+    return best_val, best_fval
+
+def best_closest_integer_solution_BLUE_multi_helper(sol, psis, w, e, mappings, budget, eps, lb, ub, idx):
+    from functools import reduce
+
+    No = len(mappings)
+
+    N = int(round(np.sqrt(psis[0].shape[0])))
 
     LL = len(idx)
-    if LL > 24:
-        raise ValueError('Too many dimensions to brute-force it')
 
     combs = unpackbits(np.arange(2**LL, dtype=int), LL)
     bnds = np.vstack([lb,ub])
@@ -161,8 +208,8 @@ def best_closest_integer_solution_BLUE_multi(sol, psis, w, e, mappings, budget=N
         if basee < 1:
             es.append(np.argwhere(basee + e[idx][redmaps[n]]@ms[redmaps[n],:] >= 1).flatten())
 
-    es = np.unique(np.concatenate(es))
     if len(es) == 0: return None, np.inf
+    es = np.unique(np.concatenate(es))
     ms = ms[:, es]
 
     if budget is not None and basecost > budget: return None,np.inf

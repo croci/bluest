@@ -1,6 +1,6 @@
 import pygmsh
-import gmsh
 import meshio
+import sys
 
 def create_mesh(mesh, cell_type, prune_z=False):
     cells = mesh.get_cells_type(cell_type)
@@ -20,53 +20,49 @@ def generate_NS_mesh(Nc1, Nc2, N):
     L = 2.2
     W = 0.41
 
-    geom = pygmsh.geo.Geometry()
-    model = geom.__enter__()
+    with pygmsh.geo.Geometry() as geom:
+        c1 = geom.add_circle(cc1, r1, mesh_size=1/Nc1)
+        c2 = geom.add_circle(cc2, r2, mesh_size=1/Nc2)
 
-    c1 = model.add_circle(cc1, r1, mesh_size=1/Nc1)
-    c2 = model.add_circle(cc2, r2, mesh_size=1/Nc2)
+        # Add points with finer resolution on left side
+        points = [geom.add_point((0,         0, 0), mesh_size=1./N),
+                  #geom.add_point((cc1[0]-r1, 0, 0), mesh_size=1./Nc1),
+                  ##geom.add_point((cc1[0],    0, 0), mesh_size=1./Nc1),
+                  ##geom.add_point((cc1[0]+r1, 0, 0), mesh_size=1./Nc1),
+                  #geom.add_point((cc2[0]-r2, 0, 0), mesh_size=1./Nc2),
+                  ##geom.add_point((cc2[0],    0, 0), mesh_size=1./Nc2),
+                  ##geom.add_point((cc2[0]+r2, 0, 0), mesh_size=1./Nc2),
+                  geom.add_point((L,         0, 0), mesh_size=1./N),
+                  geom.add_point((L,         W, 0), mesh_size=1./N),
+                  ##geom.add_point((cc2[0]+r2, W, 0), mesh_size=1./Nc2),
+                  ##geom.add_point((cc2[0],    W, 0), mesh_size=1./Nc2),
+                  #geom.add_point((cc2[0]-r2, W, 0), mesh_size=1./Nc2),
+                  ##geom.add_point((cc1[0]+r1, W, 0), mesh_size=1./Nc1),
+                  ##geom.add_point((cc1[0],    W, 0), mesh_size=1./Nc1),
+                  #geom.add_point((cc1[0]-r1, W, 0), mesh_size=1./Nc1),
+                  geom.add_point((0,         W, 0), mesh_size=1./N)]
 
-    # Add points with finer resolution on left side
-    points = [model.add_point((0,         0, 0), mesh_size=1./N),
-              #model.add_point((cc1[0]-r1, 0, 0), mesh_size=1./Nc1),
-              ##model.add_point((cc1[0],    0, 0), mesh_size=1./Nc1),
-              ##model.add_point((cc1[0]+r1, 0, 0), mesh_size=1./Nc1),
-              #model.add_point((cc2[0]-r2, 0, 0), mesh_size=1./Nc2),
-              ##model.add_point((cc2[0],    0, 0), mesh_size=1./Nc2),
-              ##model.add_point((cc2[0]+r2, 0, 0), mesh_size=1./Nc2),
-              model.add_point((L,         0, 0), mesh_size=1./N),
-              model.add_point((L,         W, 0), mesh_size=1./N),
-              ##model.add_point((cc2[0]+r2, W, 0), mesh_size=1./Nc2),
-              ##model.add_point((cc2[0],    W, 0), mesh_size=1./Nc2),
-              #model.add_point((cc2[0]-r2, W, 0), mesh_size=1./Nc2),
-              ##model.add_point((cc1[0]+r1, W, 0), mesh_size=1./Nc1),
-              ##model.add_point((cc1[0],    W, 0), mesh_size=1./Nc1),
-              #model.add_point((cc1[0]-r1, W, 0), mesh_size=1./Nc1),
-              model.add_point((0,         W, 0), mesh_size=1./N)]
+        # Add lines between all points creating the rectangle
+        channel_lines = [geom.add_line(points[i], points[i+1]) for i in range(-1, len(points)-1)]
 
-    # Add lines between all points creating the rectangle
-    channel_lines = [model.add_line(points[i], points[i+1]) for i in range(-1, len(points)-1)]
+        # Create a line loop and plane surface for meshing
+        channel_loop = geom.add_curve_loop(channel_lines)
+        plane_surface = geom.add_plane_surface(channel_loop, holes=[c1.curve_loop, c2.curve_loop])
 
-    # Create a line loop and plane surface for meshing
-    channel_loop = model.add_curve_loop(channel_lines)
-    plane_surface = model.add_plane_surface(channel_loop, holes=[c1.curve_loop, c2.curve_loop])
+        # Call gmsh kernel before add physical entities
+        geom.synchronize()
 
-    # Call gmsh kernel before add physical entities
-    model.synchronize()
+        volume_marker = 6
+        geom.add_physical([plane_surface], "Volume")
+        geom.add_physical([channel_lines[0]], "Inflow")
+        geom.add_physical([channel_lines[2]], "Outflow")
+        geom.add_physical([channel_lines[1], channel_lines[3]], "Walls")
+        geom.add_physical(c1.curve_loop.curves, "Obstacle1")
+        geom.add_physical(c2.curve_loop.curves, "Obstacle2")
 
-    volume_marker = 6
-    model.add_physical([plane_surface], "Volume")
-    model.add_physical([channel_lines[0]], "Inflow")
-    model.add_physical([channel_lines[2]], "Outflow")
-    model.add_physical([channel_lines[1], channel_lines[3]], "Walls")
-    model.add_physical(c1.curve_loop.curves, "Obstacle1")
-    model.add_physical(c2.curve_loop.curves, "Obstacle2")
+        mesh = geom.generate_mesh(dim=2)
 
-    #geom.add_rectangle(0,L,0,W,0, mesh_size=1./N, holes=[c1,c2])
-    mesh = geom.generate_mesh(dim=2)
-    gmsh.write(filestring + ".msh")
-    gmsh.clear()
-    geom.__exit__()
+        pygmsh.write(filestring + ".msh")
 
     mesh_from_file = meshio.read(filestring + ".msh")
 
@@ -78,23 +74,60 @@ def generate_NS_mesh(Nc1, Nc2, N):
 
     return filestring + ".xdmf"
 
-if __name__ == "__main__":
-    Nc1 = 16; Nc2 = 64; N = 32
-
-    import dolfin as do
-
-    comm = do.MPI.comm_world
-    mpiRank = do.MPI.rank(comm)
-    mpiSize = do.MPI.size(comm)
-
+def MPI_generate_NS_mesh(Nc1, Nc2, N):
+    from mpi4py.MPI import COMM_WORLD, COMM_SELF
+    mpi_comm = COMM_WORLD
+    mpiRank = mpi_comm.Get_rank()
     if mpiRank == 0:
-        filestring = generate_NS_mesh(Nc1,Nc2,N)
+        comm = COMM_SELF.Spawn(sys.executable, args=['mesh_generator.py', str(Nc1), str(Nc2), str(N), str(True)], maxprocs=1)
+        comm.Disconnect()
+
+    mpi_comm.barrier()
+
+    filestring = "./meshes/NS_%d_%d_%d.xdmf" % (N, Nc1, Nc2)
+    return filestring
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("Nc1", action="store", nargs='?', default=16, type=int)
+    parser.add_argument("Nc2", action="store", nargs='?', default=64, type=int)
+    parser.add_argument("N",   action="store", nargs='?', default=32, type=int)
+    parser.add_argument("ischild", action="store", nargs='?', default=False, type=bool)
+
+    args = parser.parse_args()
+
+    default = len(sys.argv) < 4
+
+    Nc1 = args.Nc1
+    Nc2 = args.Nc2
+    N   = args.N
+    ischild = args.ischild
+
+    if not default:
+        generate_NS_mesh(Nc1, Nc2, N)
+        if ischild:
+            from mpi4py import MPI
+            comm = MPI.Comm.Get_parent()
+            comm.Disconnect()
+
     else:
-        filestring = None
+        import dolfin as do
 
-    filestring = comm.bcast(filestring, root=0)
+        comm = do.MPI.comm_world
+        mpiRank = do.MPI.rank(comm)
+        mpiSize = do.MPI.size(comm)
 
-    dmesh = do.Mesh(do.MPI.comm_self)
+        if mpiRank == 0:
+            filestring = generate_NS_mesh(Nc1,Nc2,N)
+        else:
+            filestring = None
 
-    with do.XDMFFile(dmesh.mpi_comm(), filestring) as f:
-        f.read(dmesh)
+        filestring = comm.bcast(filestring, root=0)
+
+        dmesh = do.Mesh(do.MPI.comm_self)
+        with do.XDMFFile(dmesh.mpi_comm(), filestring) as f:
+            f.read(dmesh)

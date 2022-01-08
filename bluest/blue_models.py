@@ -36,7 +36,7 @@ def next_divisible_number(x, n):
 
 # Are any checks on the correlation matrix necessary?
 class BLUEProblem(object):
-    def __init__(self, M, C=None, costs=None, n_outputs=1, **params):
+    def __init__(self, M, C=None, costs=None, datafile=None, n_outputs=1, **params):
         '''
             INPUT:
 
@@ -70,8 +70,8 @@ class BLUEProblem(object):
 
         if C is None: C = [np.nan*np.ones((M,M)) for n in range(n_outputs)]
 
-        if isinstance(C,str):
-            self.load_graph_data(C)
+        if datafile is not None:
+            self.load_graph_data(datafile)
         else:
             if not isinstance(C,(list,tuple)): C = [C]
 
@@ -128,7 +128,7 @@ class BLUEProblem(object):
     def check_costs(self, warning=False):
         costs = self.get_costs()
         if costs[0] != costs.max():
-            more_expensive_models = [self.G[0].nodes[i]["model_number"] for i in costs[costs > costs[0]]]
+            more_expensive_models = [self.G[0].nodes[i]["model_number"] for i in np.argwhere(costs > costs[0]).flatten()]
             message_error = "Model zero is not the most expensive model. Consider removing the more expensive models %s" % more_expensive_models
             message_warning = "WARNING! Model zero is not the most expensive model and some estimators won't run in this setting. The more expensive models are: %s" % more_expensive_models
             if warning and self.warning: print(message_warning)
@@ -237,6 +237,8 @@ class BLUEProblem(object):
             C_dict = {"C%d" % n : nx.adjacency_matrix(self.G[n]).toarray() for n in range(self.n_outputs)}
             costs = self.get_costs()
             np.savez(filename, M = self.M, n_outputs = self.n_outputs, costs=costs, **C_dict, SG=self.SG)
+
+        COMM_WORLD.barrier()
 
     def load_graph_data(self, filename):
         if self.mpiRank == 0:
@@ -464,18 +466,9 @@ class BLUEProblem(object):
 
         if self.verbose: print("Computing optimal sample allocation...")
         if self.mpiRank == 0:
-            if eps is not None:
-                CC = [c/e**2 for c,e in zip(C,eps)]
-                self.MOSAP = MOSAP(CC, K, Ks, groups, multi_groups, costs, multi_costs)
-                self.MOSAP.solve(eps=np.ones_like(eps), solver=solver, integer=integer)
-
-                Vs = self.MOSAP.variances(self.MOSAP.samples)
-                Vs = np.array([e**2*v for e,v in zip(eps, Vs)])
-
-            else:
-                self.MOSAP = MOSAP(C, K, Ks, groups, multi_groups, costs, multi_costs)
-                self.MOSAP.solve(budget=budget, solver=solver, integer=integer)
-                Vs = self.MOSAP.variances(self.MOSAP.samples)
+            self.MOSAP = MOSAP(C, K, Ks, groups, multi_groups, costs, multi_costs)
+            self.MOSAP.solve(eps=eps, budget=budget, solver=solver, integer=integer)
+            Vs = self.MOSAP.variances(self.MOSAP.samples)
 
             cost_BLUE = self.MOSAP.tot_cost
             N_MC = max(C[n][0,0]/Vs[n] for n in range(self.n_outputs))

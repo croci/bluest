@@ -1,9 +1,11 @@
 from bluest import *
 import numpy as np
-from dolfin import set_log_level, MPI
+from dolfin import set_log_level, MPI, LogLevel
 from NS import build_space, solve_stokes, solve_navier_stokes, postprocess
+import sys
 
 set_log_level(30)
+set_log_level(LogLevel.ERROR)
 
 mpiRank = MPI.rank(MPI.comm_world)
 mpiSize = MPI.size(MPI.comm_world)
@@ -14,16 +16,21 @@ RNG = np.random.RandomState(mpiRank)
 
 No = 6
 
+if verbose: print("Loading models...")
+
 model_data = []
 for N_bulk in [64, 32, 16]:
-    for N_circle1 in [4*N_bulk, N_bulk//2]:
-        for N_circle2 in [4*N_bulk, N_bulk//2]:
+    for N_circle1 in [4*N_bulk, max(16,N_bulk//2)]:
+        for N_circle2 in [4*N_bulk, max(16,N_bulk//2)]:
 
             # Prepare function space, BCs and measure on circle
             W, bndry, ds_circle1, ds_circle2 = build_space(N_circle1, N_circle2, N_bulk, comm=MPI.comm_self)
             model_data.append({"W" : W, "bndry" : bndry, "ds_circle1" : ds_circle1, "ds_circle2" : ds_circle2})
+            if verbose: print("Model %d loaded." % len(model_data))
 
 M = len(model_data) # should be 24
+
+if verbose: print("Models loaded.")
 
 class NavierStokesProblem(BLUEProblem):
     def sampler(self, ls, N=1):
@@ -62,29 +69,33 @@ class NavierStokesProblem(BLUEProblem):
 
 if __name__ == "__main__":
 
-    problem = NavierStokesProblem(M, n_outputs=No, covariance_estimation_samples=max(mpiSize*50,50))
+    mus = np.array([5.5720, 0.0110, 0.117488, 10.0786, 0.0595, -0.018147])
+
+    #costs = np.load("NS_costs.npz")["times"]
+    #problem = NavierStokesProblem(M, n_outputs=No, costs=costs, covariance_estimation_samples=max(mpiSize*50,50))
+    #problem.save_graph_data("bluest-NS.npz")
+
+    problem = NavierStokesProblem(M, n_outputs=No, datafile="bluest-NS.npz")
+
     C = problem.get_covariances()
 
     if verbose: print("\nRanks of estimated model covariances:", [np.linalg.matrix_rank(c, tol=1.0e-12) for c in C], "\n")
+    if verbose: print("Output functional variances:", [c[0,0] for c in C])
 
-    problem.save_graph_data("bluest-NS.npz")
-    problem = NavierStokesProblem(M, C="bluest-NS.npz", n_outputs=No)
-    import sys; sys.exit(0)
+    #import sys; sys.exit(0)
 
-    solver = ["BLUE", "MLMC", "MFMC"][0]
+    solver = ["BLUE", "MLMC", "MFMC"]
 
-    eps = None; budget = 10
-    if solver == "MLMC":
-        out_MLMC = problem.setup_mlmc(budget=budget, eps=eps)
-        if verbose: print("\nMLMC. Errors: %s. Total cost: %f." % (out_MLMC[1]["errors"], out_MLMC[1]["total_cost"]))
-        #out = problem.solve_mlmc(budget=budget, eps=eps)
-    elif solver == "MFMC":
-        out_MFMC = problem.setup_mfmc(budget=budget, eps=eps)
-        if verbose: print("\nMFMC. Errors: %s. Total cost: %f." % (out_MFMC[1]["errors"], out_MFMC[1]["total_cost"]))
-        #out = problem.solve_mfmc(budget=budget, eps=eps)
-    elif solver == "BLUE":
-        # the following is sometimes tricky since it needs to solve a nasty optimization problem to find the optimal sample allocation
-        # if it fails ask me about it.
-        out_BLUE = problem.setup_solver(K=3, budget=budget, eps=eps)
-        if verbose: print("\nBLUE. Errors: %s. Total cost: %f." % (out_BLUE[1]["errors"], out_BLUE[1]["total_cost"]))
-        #out = problem.solve()
+    #eps = None; budget = 10
+    eps = 0.5*abs(mus); budget=None
+
+    out_BLUE = problem.setup_solver(K=3, budget=budget, eps=eps)
+    if verbose: print("\nBLUE. Errors: %s. Total cost: %f." % (out_BLUE[1]["errors"], out_BLUE[1]["total_cost"]))
+    out_MLMC = problem.setup_mlmc(budget=budget, eps=eps)
+    if verbose: print("\nMLMC. Errors: %s. Total cost: %f." % (out_MLMC[1]["errors"], out_MLMC[1]["total_cost"]))
+    out_MFMC = problem.setup_mfmc(budget=budget, eps=eps)
+    if verbose: print("\nMFMC. Errors: %s. Total cost: %f." % (out_MFMC[1]["errors"], out_MFMC[1]["total_cost"]))
+
+    out = problem.solve()
+    if verbose: print(out)
+    MPI.comm_world.barrier()

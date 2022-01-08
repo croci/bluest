@@ -3,26 +3,24 @@
 
 from dolfin import *
 import matplotlib.pyplot as plt
-from mesh_generator import generate_NS_mesh
+from mesh_generator import MPI_generate_NS_mesh
+from mpi4py import MPI
 
-worldcomm = MPI.comm_world
-mpiRank = MPI.rank(worldcomm)
-mpiSize = MPI.size(worldcomm)
+set_log_level(LogLevel.ERROR)
 
-def build_space(N_circle1, N_circle2, N_bulk, comm=MPI.comm_world):
+worldcomm = MPI.COMM_WORLD
+mpiRank = worldcomm.Get_rank()
+mpiSize = worldcomm.Get_size()
+
+def build_space(N_circle1, N_circle2, N_bulk, comm=worldcomm):
     """Prepare data for DGF benchmark. Return function
     space, list of boundary conditions and surface measure
     on the cylinder."""
 
-    if mpiRank == 0:
-        filestring = generate_NS_mesh(N_circle1, N_circle2, N_bulk)
-    else:
-        filestring = None
-
-    filestring = worldcomm.bcast(filestring, root=0)
+    filestring = MPI_generate_NS_mesh(N_circle1, N_circle2, N_bulk)
 
     mesh = Mesh(comm)
-    with XDMFFile(mesh.mpi_comm(), filestring) as f:
+    with XDMFFile(comm, filestring) as f:
         f.read(mesh)
 
     center1 = Point(0.2, 0.2)
@@ -59,7 +57,7 @@ def build_space(N_circle1, N_circle2, N_bulk, comm=MPI.comm_world):
 
     return W, bndry, ds_circle1, ds_circle2
 
-def get_bcs(W, U, bndry, comm=MPI.comm_world):
+def get_bcs(W, U, bndry, comm=worldcomm):
     u_in = Expression(("4.0*U*x[1]*(0.41 - x[1])/(0.41*0.41)", "0.0"), degree=2, U=U, mpi_comm=comm)
 
     # Prepare Dirichlet boundary conditions
@@ -71,7 +69,7 @@ def get_bcs(W, U, bndry, comm=MPI.comm_world):
 
     return bcs
 
-def solve_stokes(W, nu, U, bndry, comm=MPI.comm_world):
+def solve_stokes(W, nu, U, bndry, comm=worldcomm):
     """Solve steady Stokes and return the solution"""
 
     bcs = get_bcs(W, U, bndry, comm=comm)
@@ -88,7 +86,7 @@ def solve_stokes(W, nu, U, bndry, comm=MPI.comm_world):
 
     return w
 
-def solve_navier_stokes(W, nu, U, bndry, comm=MPI.comm_world):
+def solve_navier_stokes(W, nu, U, bndry, comm=worldcomm):
     """Solve steady Navier-Stokes and return the solution"""
 
     bcs = get_bcs(W, U, bndry, comm=comm)
@@ -184,6 +182,8 @@ def tasks_1_2_3_4():
     # Solve Navier-Stokes
     w = solve_navier_stokes(W, nu, U, bndry)
     save_and_plot(w, 'navier-stokes')
+    print(postprocess(w, nu, U, ds_circle1, 1))
+    print(postprocess(w, nu, U, ds_circle2, 2))
 
     # Open and hold plot windows
     plt.show()
@@ -211,9 +211,9 @@ def tasks_5_6():
     file2.write(fmt_header.format("N_bulk", "N_circle1", "N_circle2", "#dofs", "C_D", "C_L", "p_diff")+"\n")
 
     # Solve on series of meshes
-    for N_bulk in [32, 64, 128]:
-        for N_circle1 in [N_bulk//2, 4*N_bulk]:
-            for N_circle2 in [N_bulk//2, 4*N_bulk]:
+    for N_bulk in [16, 32, 64, 128]:
+        for N_circle1 in [max(16,N_bulk//2), 4*N_bulk]:
+            for N_circle2 in [max(16,N_bulk//2), 4*N_bulk]:
 
                 # Prepare function space, BCs and measure on circle
                 W, bndry, ds_circle1, ds_circle2 = build_space(N_circle1, N_circle2, N_bulk)
@@ -230,8 +230,41 @@ def tasks_5_6():
     # Pop log level
     set_log_level(old_level)
 
+def cost_estimation(Nlist):
+    from numpy import savez,array
+    from time import time
+
+    nu = 0.0005
+    U  = 0.5
+
+    times = []
+    space_dims = []
+    Nvals = []
+    for N_bulk in Nlist:
+        for N_circle1 in [4*N_bulk, max(16,N_bulk//2)]:
+            for N_circle2 in [4*N_bulk, max(16,N_bulk//2)]:
+                print("\n", N_bulk, N_circle1, N_circle2, "\n")
+                W, bndry, ds_circle1, ds_circle2 = build_space(N_circle1, N_circle2, N_bulk)
+
+                tic = time()
+                w = solve_navier_stokes(W, nu, U, bndry)
+                C_D, C_L, p_diff = postprocess(w, nu, U, ds_circle1, 1)
+                C_D, C_L, p_diff = postprocess(w, nu, U, ds_circle2, 2)
+                toc = time()
+
+                times.append(toc-tic)
+                space_dims.append(W.dim())
+                Nvals.append([N_bulk, N_circle1, N_circle2])
+
+    savez("NS_costs.npz", times=array(times), space_dims=array(space_dims), Nvals=array(Nvals))
+    print(times, "\n\n", space_dims)
+
 if __name__ == "__main__":
 
-    tasks_1_2_3_4()
-    #tasks_5_6()
+    #build_space(16, 16, 32, comm=MPI.COMM_SELF)
+
+    #cost_estimation([64,32,16])
+
+    #tasks_1_2_3_4()
+    tasks_5_6()
 
