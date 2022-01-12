@@ -237,7 +237,7 @@ class MOSAP(object):
         
         #prob.solve(verbose=True, solver="SCS", acceleration_lookback=0, acceleration_interval=0)
         #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
-        prob.solve(verbose=True, solver="CVXOPT", abstol=1.0e-8, reltol=1.e-5, max_iters=1000, feastol=1.0e-5, kttsolver='chol',refinement=2)
+        prob.solve(verbose=True, solver="CVXOPT", abstol=1.0e-8, reltol=1.e-5, max_iters=1000, feastol=1.0e-6, kttsolver='chol',refinement=2)
 
         if budget is not None: m.value *= budget
 

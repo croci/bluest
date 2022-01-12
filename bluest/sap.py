@@ -4,9 +4,7 @@ from itertools import combinations
 import cvxpy as cp
 from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds
 
-try: from .misc import assemble_psi,get_phi_full,variance_full,variance_GH_full,PHIinvY0,best_closest_integer_solution_BLUE
-except ImportError:
-    from misc import assemble_psi,get_phi_full,variance_full,variance_GH_full,PHIinvY0,best_closest_integer_solution_BLUE
+from .misc import assemble_psi,get_phi_full,variance_full,variance_GH_full,PHIinvY0,best_closest_integer_solution_BLUE
 
 ########################################################
 

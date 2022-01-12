@@ -248,7 +248,7 @@ class BLUEProblem(object):
 
         data = COMM_WORLD.bcast(data, root=0)
 
-        if self.M != int(data["M"]) or self.n_outputs != int(data["n_outputs"]):
+        if self.M != int(data["M"]) or self.n_outputs > int(data["n_outputs"]):
             raise ValueError("Loaded data number of models and/or number of outputs mismatch with the user-given values")
 
         self.G = []
@@ -260,7 +260,7 @@ class BLUEProblem(object):
 
             self.G.append(GG)
 
-        self.SG = data["SG"].tolist()
+        self.SG = data["SG"].tolist()[:self.n_outputs]
 
     def check_graphs(self, remove_uncorrelated=False):
         for n in range(self.n_outputs):

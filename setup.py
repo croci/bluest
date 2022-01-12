@@ -1,7 +1,23 @@
 import setuptools
+import subprocess
+import os
+import sys
 
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
+
+from setuptools.command.build_ext import build_ext
+class Build(build_ext):
+     """Customized setuptools build command - builds protos on build."""
+     def run(self):
+         from pybind11 import get_include
+         pybind11_dir = get_include()[:-8]
+         os.environ["PYBIND11_DIR"] = pybind11_dir
+         
+         out = subprocess.run(["make"])
+         if out.returncode != 0:
+             sys.exit(-1)
+         build_ext.run(self)
 
 setuptools.setup(
     name="bluest",
@@ -22,6 +38,10 @@ setuptools.setup(
     ],
     packages=["bluest"],
     package_dir={"bluest": "bluest"},
-    #packages=setuptools.find_packages(where="bluest"),
     python_requires=">=3.7",
+    install_requires=['pybind11',],
+    setup_requires=['pybind11',],
+    has_ext_modules=lambda: True,
+    cmdclass={ 'build_ext': Build,}
+
 )

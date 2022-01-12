@@ -1,6 +1,14 @@
 import numpy as np
-from numba import njit,jit
 from itertools import combinations, product
+
+try: from numba import njit
+except ImportError: 
+    def njit(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
+from .cmisc import assemble_psi_c,objectiveK_c,gradK_c,hessKQ_c
 
 ##################################################################################################################
 
@@ -413,10 +421,10 @@ def PHIinvY0(m, y, psi, groups, cumsizes, delta=0.0):
 
     return mu, var
 
-##################################################################################################################
-    
+###################################################################################################################
+
 @njit(fastmath=True)
-def hessKQ(k, q, Lk, Lq, groupsk, groupsq, invcovsk, invcovsq, invPHI):
+def hessKQ_numba(k, q, Lk, Lq, groupsk, groupsq, invcovsk, invcovsq, invPHI):
     hess = np.zeros((Lk,Lq))
     ip = invPHI[:,0]
     ksq = k*k; qsq = q*q
@@ -436,7 +444,7 @@ def hessKQ(k, q, Lk, Lq, groupsk, groupsq, invcovsk, invcovsq, invPHI):
     return hess
 
 @njit(fastmath=True)
-def gradK(k, Lk,groupsk,invcovsk,invPHI):
+def gradK_numba(k, Lk,groupsk,invcovsk,invPHI):
     grad = np.zeros((Lk,))
     for i in range(Lk):
         temp = invPHI[groupsk[i],0] # PHI is symmetric
@@ -447,18 +455,18 @@ def gradK(k, Lk,groupsk,invcovsk,invPHI):
     return grad
 
 @njit(fastmath=True)
-def objectiveK(N, k,Lk,mk,groupsk,invcovsk):
+def objectiveK_numba(N, k,Lk,mk,groupsk,invcovsk):
     PHI = np.zeros((N*N,))
     for i in range(Lk):
         group = groupsk[i]
         for j in range(k):
             for l in range(k):
-                PHI[N*group[j]+group[l]] += mk[i]*invcovsk[k*k*i + k*j + l]
+                PHI[N*groupsk[j]+group[l]] += mk[i]*invcovsk[k*k*i + k*j + l]
 
     return PHI
 
 @njit(fastmath=True)
-def assemble_psi(N,k,Lk,groupsk,invcovsk):
+def assemble_psi_numba(N,k,Lk,groupsk,invcovsk):
     psi = np.zeros((N*N,Lk))
     for i in range(Lk):
         group = groupsk[i]
@@ -466,3 +474,28 @@ def assemble_psi(N,k,Lk,groupsk,invcovsk):
             for l in range(k):
                 psi[N*group[j]+group[l], i] += invcovsk[k*k*i + k*j + l]
     return psi
+
+def assemble_psi(N,k,Lk,groupsk,invcovsk):
+    psi = np.zeros((N*N,Lk), order='C')
+    assemble_psi_c(psi.ravel(order='C'), N, k, Lk, groupsk.ravel(order='C'), invcovsk)
+    #assert np.allclose(psi, assemble_psi_numba(N,k,Lk,groupsk,invcovsk))
+    return psi
+
+def objectiveK(N, k,Lk,mk,groupsk,invcovsk):
+    PHI = np.zeros((N*N,))
+    objectiveK_c(PHI, k,Lk,mk,groupsk.ravel(order='C'),invcovsk)
+    #assert np.allclose(PHI, objectiveK_numba(N,k,Lk,mk,groupsk,invcovsk))
+    return PHI
+
+def gradK(k, Lk, groupsk, invcovsk, invPHI):
+    grad = np.zeros((Lk,))
+    gradK_c(grad, k, Lk, groupsk.ravel(order='C'), invcovsk, invPHI[0])
+    #assert np.allclose(grad, gradK_numba(k,Lk,groupsk,invcovsk,invPHI))
+    return grad
+
+def hessKQ(k, q, Lk, Lq, groupsk, groupsq, invcovsk, invcovsq, invPHI):
+    N = invPHI.shape[0]
+    hess = np.zeros((Lk,Lq), order='C')
+    hessKQ_c(hess.ravel(order='C'), N, k, q, Lk, Lq, groupsk.ravel(order='C'), groupsq.ravel(order='C'), invcovsk, invcovsq, invPHI.ravel(order='C'))
+    #assert np.allclose(hess, hessKQ_numba(k,q,Lk,Lq,groupsk,groupsq,invcovsk,invcovsq,invPHI))
+    return hess
