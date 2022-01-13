@@ -6,6 +6,9 @@ import matplotlib.pyplot as plt
 from mesh_generator import MPI_generate_NS_mesh
 from mpi4py import MPI
 
+import logging
+logging.getLogger('FFC').setLevel(logging.WARNING)
+
 set_log_level(LogLevel.ERROR)
 
 worldcomm = MPI.COMM_WORLD
@@ -261,10 +264,10 @@ def cost_estimation(Nlist):
 
 if __name__ == "__main__":
 
-    #build_space(16, 16, 32, comm=MPI.COMM_SELF)
+    build_space(16, 16, 32, comm=MPI.COMM_SELF)
 
     #cost_estimation([64,32,16])
 
-    #tasks_1_2_3_4()
+    tasks_1_2_3_4()
     tasks_5_6()
 
