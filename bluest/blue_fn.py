@@ -1,6 +1,6 @@
 # blue function for coupled levels
 
-from numpy import zeros, array
+from numpy import zeros, array, isfinite
 from numpy.random import RandomState
 from numpy import sum as npsum
 from time import time
@@ -9,6 +9,19 @@ from mpi4py.MPI import COMM_WORLD, SUM
 
 cols = get_terminal_size()[0]
 if cols == 0: cols = 80 # if ran with MPI 0 cols is returned due to a bug
+
+def is_output_finite(Ps):
+    No = len(Ps)
+    L  = len(Ps[0])
+    for i in range(L):
+        for n in range(No):
+            check = isfinite(Ps[n][i])
+            try: check = all(check)
+            except TypeError: pass
+            if check is False:
+                return False,i,n
+    return True,None,None
+
 
 def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No = 1, verbose=True):
     """
@@ -73,12 +86,17 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
     for it in range(1, NN[mpiRank]+1, N1):
         N2 = min(N1, NN[mpiRank] - it + 1)
 
-        samples = sampler(ls, N2)
+        check = (False, None, None)
+        while check[0] is False:
+            samples = sampler(ls, N2)
 
-        start = time()
-        Ps = problem.evaluate(ls, samples) 
+            start = time()
+            Ps = problem.evaluate(ls, samples) 
+            end = time()
 
-        end = time()
+            check = is_output_finite(Ps)
+            if not check[0]: print("Warning! Problem evaluation returned inf or NaN value for model %d and output %d. Resampling..." % (check[1],check[2]))
+
         cpu_cost += end - start # cost defined as total computational time
         for n in range(No):
             if N1 == 1:
