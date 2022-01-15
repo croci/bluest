@@ -1,6 +1,6 @@
 # blue function for coupled levels
 
-from numpy import zeros, array, isfinite
+from numpy import zeros, array, isfinite, ndarray
 from numpy.random import RandomState
 from numpy import sum as npsum
 from time import time
@@ -16,8 +16,10 @@ def is_output_finite(Ps):
     for i in range(L):
         for n in range(No):
             check = isfinite(Ps[n][i])
-            try: check = all(check)
-            except TypeError: pass
+            if isinstance(check, ndarray): check = check.all()
+            else:
+                try: check = all(check)
+                except TypeError: pass
             if check is False:
                 return False,i,n
     return True,None,None
