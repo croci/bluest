@@ -16,12 +16,14 @@ def is_output_finite(Ps):
     for i in range(L):
         for n in range(No):
             check = isfinite(Ps[n][i])
-            if isinstance(check, ndarray): check = check.all()
+            if isinstance(check, ndarray):
+                check = check.all()
             else:
                 try: check = all(check)
                 except TypeError: pass
-            if check is False:
+            if not check:
                 return False,i,n
+
     return True,None,None
 
 
@@ -88,16 +90,17 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
     for it in range(1, NN[mpiRank]+1, N1):
         N2 = min(N1, NN[mpiRank] - it + 1)
 
-        check = (False, None, None)
-        while check[0] is False:
+        isfinite = False
+        while not isfinite:
             samples = sampler(ls, N2)
 
             start = time()
             Ps = problem.evaluate(ls, samples) 
             end = time()
 
-            check = is_output_finite(Ps)
-            if not check[0]: print("Warning! Problem evaluation returned inf or NaN value for model %d and output %d. Resampling..." % (check[1],check[2]))
+            isfinite,model_n,output_n = is_output_finite(Ps)
+            if not isfinite:
+                print("Warning! Problem evaluation returned inf or NaN value for model %d and output %d. Resampling..." % (model_n,output_n), flush=True)
 
         cpu_cost += end - start # cost defined as total computational time
         for n in range(No):
