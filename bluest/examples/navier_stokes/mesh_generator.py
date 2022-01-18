@@ -78,11 +78,15 @@ def MPI_generate_NS_mesh(Nc1, Nc2, N):
     from mpi4py.MPI import COMM_WORLD, COMM_SELF
     mpi_comm = COMM_WORLD
     mpiRank = mpi_comm.Get_rank()
-    if mpiRank == 0:
-        comm = COMM_SELF.Spawn(sys.executable, args=['mesh_generator.py', str(Nc1), str(Nc2), str(N), str(True)], maxprocs=1)
-        comm.Disconnect()
+    mpiSize = mpi_comm.Get_size()
+    if mpiSize > 1:
+        if mpiRank == 0:
+            comm = COMM_SELF.Spawn(sys.executable, args=['mesh_generator.py', str(Nc1), str(Nc2), str(N), str(True)], maxprocs=1)
+            comm.Disconnect()
 
-    mpi_comm.barrier()
+        mpi_comm.barrier()
+    else:
+        generate_NS_mesh(Nc1, Nc2, N)
 
     filestring = "./meshes/NS_%d_%d_%d.xdmf" % (N, Nc1, Nc2)
     return filestring

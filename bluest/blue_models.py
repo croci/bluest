@@ -78,7 +78,7 @@ class BLUEProblem(object):
             self.G = [self.get_model_graph(C[n], costs=costs) for n in range(n_outputs)]
             self.SG = [list(range(M)) for n in range(n_outputs)]
 
-            if costs is None: self.estimate_costs(2*self.get_comm().Get_size())
+            if costs is None: self.estimate_costs(self.get_comm().Get_size())
             self.check_costs(warning=True) # Sending a warning just in case
             
             self.estimate_missing_covariances(next_divisible_number(self.params["covariance_estimation_samples"], self.mpiSize))
@@ -394,9 +394,10 @@ class BLUEProblem(object):
                     self.G[n].add_edge(i,j)
                     self.G[n][i][j]['weight'] = C_new[i,j]
 
-    def estimate_costs(self, N=2):
+    def estimate_costs(self, N=1):
         if self.verbose: print("Cost estimation via sampling...")
         for l in range(self.M):
+            self.blue_fn([l], self.get_comm().Get_size(), verbose=False) # force compiling
             _,_,cost = self.blue_fn([l], N, verbose=False)
             for n in range(self.n_outputs):
                 self.G[n].nodes[l]['cost'] = cost/N
