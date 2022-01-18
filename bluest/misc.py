@@ -332,7 +332,8 @@ def best_closest_integer_solution(sol, obj, constr, N, e=None):
 
     fvals = np.array([check_sol(i) for i in range(ms.shape[0])])
     i = np.argmin(fvals)
-    best_val = ms[i].copy()
+    best_val = val.copy()
+    best_val[idx] = ms[i].copy()
     best_fval = fvals[i]
 
     return best_val, best_fval
