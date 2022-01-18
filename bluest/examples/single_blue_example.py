@@ -142,9 +142,9 @@ if comparison_test:
     out_MFMC = problem.setup_mfmc(budget=budget, eps=eps)
     out      = problem.setup_solver(K=M, budget=budget, eps=eps, solver="cvxpy")
 
-    if verbose: print("\nMLMC. Error: %f. Total cost: %f." % (out_MLMC[1]["error"], out_MLMC[1]["total_cost"]))
-    if verbose: print("MFMC. Error: %f. Total cost: %f." % (out_MFMC[1]["error"], out_MFMC[1]["total_cost"]))
-    if verbose: print("BLUE. Error: %f. Total cost: %f.\n\n" % (out["error"],      out["total_cost"]))
+    if verbose: print("\nMLMC. Errors: %s. Total cost: %f." % (out_MLMC[1]["errors"], out_MLMC[1]["total_cost"]))
+    if verbose: print("MFMC. Errors: %s. Total cost: %f." % (out_MFMC[1]["errors"], out_MFMC[1]["total_cost"]))
+    if verbose: print("BLUE. Errors: %s. Total cost: %f.\n\n" % (out[1]["errors"],      out[1]["total_cost"]))
 
     eps    = 0.25;  budget = None
 
@@ -152,9 +152,9 @@ if comparison_test:
     out_MFMC = problem.setup_mfmc(budget=budget, eps=eps)
     out      = problem.setup_solver(K=M, budget=budget, eps=eps, solver="cvxpy")
 
-    if verbose: print("\nMLMC. Error: %f. Total cost: %f." % (out_MLMC[1]["error"], out_MLMC[1]["total_cost"]))
-    if verbose: print("MFMC. Error: %f. Total cost: %f." % (out_MFMC[1]["error"], out_MFMC[1]["total_cost"]))
-    if verbose: print("BLUE. Error: %f. Total cost: %f." % (out["error"],      out["total_cost"]))
+    if verbose: print("\nMLMC. Errors: %s. Total cost: %f." % (out_MLMC[1]["errors"], out_MLMC[1]["total_cost"]))
+    if verbose: print("MFMC. Errors: %s. Total cost: %f." % (out_MFMC[1]["errors"], out_MFMC[1]["total_cost"]))
+    if verbose: print("BLUE. Errors: %s. Total cost: %f." % (out[1]["errors"],      out[1]["total_cost"]))
 
     sys.exit(0)
 

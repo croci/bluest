@@ -80,11 +80,17 @@ def MPI_generate_NS_mesh(Nc1, Nc2, N):
     mpiRank = mpi_comm.Get_rank()
     mpiSize = mpi_comm.Get_size()
     if mpiSize > 1:
+        oversubscribe = os.environ.get("OMPI_MCA_rmaps_base_oversubscribe")
+        os.environ["OMPI_MCA_rmaps_base_oversubscribe"] = '1'
         if mpiRank == 0:
             comm = COMM_SELF.Spawn(sys.executable, args=['mesh_generator.py', str(Nc1), str(Nc2), str(N), str(True)], maxprocs=1)
             comm.Disconnect()
 
         mpi_comm.barrier()
+        if oversubscribe is not None:
+            os.environ["OMPI_MCA_rmaps_base_oversubscribe"] = oversubscribe
+        else:
+            del os.environ["OMPI_MCA_rmaps_base_oversubscribe"]
     else:
         generate_NS_mesh(Nc1, Nc2, N)
 

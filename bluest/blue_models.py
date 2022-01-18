@@ -71,7 +71,8 @@ class BLUEProblem(object):
         if C is None: C = [np.nan*np.ones((M,M)) for n in range(n_outputs)]
 
         if datafile is not None:
-            self.load_graph_data(datafile)
+            self.load_graph_data(datafile, costs)
+            self.check_costs(warning=True) # Sending a warning just in case
         else:
             if not isinstance(C,(list,tuple)): C = [C]
 
@@ -240,7 +241,7 @@ class BLUEProblem(object):
 
         COMM_WORLD.barrier()
 
-    def load_graph_data(self, filename):
+    def load_graph_data(self, filename, costs=None):
         if self.mpiRank == 0:
             data = dict(np.load(filename))
         else:
@@ -255,7 +256,8 @@ class BLUEProblem(object):
         for n in range(self.n_outputs):
             GG = nx.from_numpy_matrix(data["C%d" % n])
             for l in range(self.M):
-                GG.nodes[l]['cost'] = data["costs"][l]
+                if costs is None: GG.nodes[l]['cost'] = data["costs"][l]
+                else:             GG.nodes[l]['cost'] = costs[l]
                 GG.nodes[l]['model_number'] = l
 
             self.G.append(GG)
