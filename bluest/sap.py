@@ -316,7 +316,7 @@ if __name__ == '__main__':
     else:
         cvxpy_sol  = problem.solve(budget=budget, solver="cvxpy")
         scipy_sol  = problem.solve(budget=budget, solver="scipy")
-        gurobi_sol = problem.solve(budget=budget, solver="gurobi")
+        #gurobi_sol = problem.solve(budget=budget, solver="gurobi")
         print("Budget: ", budget)
 
     sols = [gurobi_sol, cvxpy_sol, scipy_sol]
