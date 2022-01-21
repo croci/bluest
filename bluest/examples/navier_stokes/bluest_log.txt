@@ -1,0 +1,47 @@
+FULL:
+
+    BLUE cost:  371314.21153212513 MC cost:  5819998.477375146 Savings:  15.674052585707765
+
+    Model groups selected: [[9], [11], [7, 11], [8, 11], [9, 10], [9, 11], [10, 11], [0, 5, 8], [0, 5, 10], [5, 8, 11], [5, 9, 10], [5, 9, 11]]
+
+    BLUE estimator setup. Max error:  0.00864738546714367  Cost:  371314.21153212513 
+
+    Setting up optimal MLMC estimator...
+
+    Best MLMC estimator found. Coupled models: [0, 4, 9]  Max error:  0.008325307757169267  Cost:  505273.92158154864 
+
+    Setting up optimal MFMC estimator...
+
+    Best MFMC estimator found. Coupled models: [0, 4, 9]  Max error:  [0.0038718621429504638, 0.0001063939981311602, 0.00014711399823005036, 0.008565965195069327, 0.0005070270166749007, 1.934214475044101e-05]  Cost:  465707.8708401978
+
+PART1:
+
+    BLUE cost:  361357.0932454695 MC cost:  5827705.7018462885 Savings:  16.12727634458675
+
+    Model groups selected: [[9], [11], [0, 5, 11], [5, 9, 11]]
+
+    BLUE estimator setup. Max error:  0.003889047357007949  Cost:  361357.0932454695 
+
+    Setting up optimal MLMC estimator...
+
+    Best MLMC estimator found. Coupled models: [0, 4, 5, 9]  Max error:  0.003950026179420934  Cost:  378250.68369028013 
+
+    Setting up optimal MFMC estimator...
+
+    Best MFMC estimator found. Coupled models: [0, 5, 9]  Max error:  [0.003897183818129563, 0.00010999884765601213, 0.00014803185245262164]  Cost:  368551.27479406924
+
+PART2:
+
+    BLUE cost:  137303.25403624383 MC cost:  2121375.1879154635 Savings:  15.450290692713558
+
+    Model groups selected: [[8], [10], [11], [8, 11], [10, 11], [0, 8, 10], [7, 8, 10], [8, 9, 10], [8, 10, 11]]
+
+    BLUE estimator setup. Max error:  0.014242579369235347  Cost:  137303.25403624383 
+
+    Setting up optimal MLMC estimator...
+
+    Best MLMC estimator found. Coupled models: [0, 6, 10, 11]  Max error:  0.01397517136236961  Cost:  139984.5304777595 
+
+    Setting up optimal MFMC estimator...
+
+    Best MFMC estimator found. Coupled models: [0, 6, 10]  Max error:  [0.014147276809775343, 0.0005949951148439893, 4.949285784322827e-05]  Cost:  147356.22602965403
