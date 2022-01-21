@@ -20,6 +20,19 @@ No = 6 - 3*int(mode != "full")
 
 if verbose: print("Loading models...")
 
+# 0:  (64, f, f). cost = 22.60032949
+# 1:  (64, f, c). cost = 15.75815486
+# 2:  (64, c, f). cost = 17.81515651
+# 3:  (64, c, c). cost = 10.95222405
+# 4:  (32, f, f). cost = 6.09950577
+# 5:  (32, f, c). cost = 4.2777594
+# 6:  (32, c, f). cost = 4.75914333
+# 7:  (32, c, c). cost = 2.94629325
+# 8:  (16, f, f). cost = 1.70378913
+# 9:  (16, f, c). cost = 1.29555189
+# 10: (16, c, f). cost = 1.40823723
+# 11: (16, c, c). cost = 1
+
 model_data = []
 for N_bulk in [64, 32, 16]:
     for N_circle1 in [4*N_bulk, max(16,N_bulk//2)]:
@@ -76,12 +89,13 @@ class NavierStokesProblem(BLUEProblem):
 
 if __name__ == "__main__":
 
-    mus = np.array([5.5720, 0.0110, 0.117488, 10.0786, 0.0595, -0.018147])
+    mus = np.array([5.5720, 0.0110, 0.117488, 10.0786, 0.0595, -0.018147]) # the estimated avg of the outputs
+
     if mode == "part1":   mus = mus[:3]
     elif mode == "part2": mus = mus[3:]
     costs = np.array([model["W"].dim() for model in model_data]); costs = costs/min(costs)
+    if verbose: print("Model pseudo-costs: ", costs)
 
-    #costs = np.load("NS_costs.npz")["times"]
     #problem = NavierStokesProblem(M, n_outputs=No, costs=costs, covariance_estimation_samples=max(mpiSize*50,50))
     #problem.save_graph_data("NS_model_data_full.npz")
 
