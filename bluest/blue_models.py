@@ -83,7 +83,8 @@ class BLUEProblem(object):
             self.check_costs(warning=True) # Sending a warning just in case
             
             self.estimate_missing_covariances(next_divisible_number(self.params["covariance_estimation_samples"], self.mpiSize))
-            self.project_covariances()
+            if not self.params["skip_projection"]:
+                self.project_covariances()
 
             self.check_graphs(remove_uncorrelated=self.params["remove_uncorrelated"])
 
@@ -320,6 +321,7 @@ class BLUEProblem(object):
         if self.verbose: print("Covariance estimation with %d samples..." % N)
         C = [nx.adjacency_matrix(self.G[n]).toarray() for n in range(self.n_outputs)]
         ls = list(np.where(np.isnan(np.sum(sum(C),1)))[0])
+        if len(ls) == 0: return
         sumse,sumsc,cost = self.blue_fn(ls, N)
         inners = self.get_models_inner_products()
         C_hat = [sumsc[n]/N - self.outer(sumse[n],sumse[n],inners[n])/N**2 for n in range(self.n_outputs)]
