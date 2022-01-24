@@ -83,7 +83,7 @@ class BLUEProblem(object):
             self.check_costs(warning=True) # Sending a warning just in case
             
             self.estimate_missing_covariances(next_divisible_number(self.params["covariance_estimation_samples"], self.mpiSize))
-            if not self.params["skip_projection"]:
+            if not self.params.get("skip_projection", False):
                 self.project_covariances()
 
             self.check_graphs(remove_uncorrelated=self.params["remove_uncorrelated"])
