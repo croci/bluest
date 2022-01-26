@@ -18,7 +18,7 @@ RNG = RandomState(mpiRank)
 dim = 2 # spatial dimension
 buf = 1
 n_levels  = 7
-No = 2
+No = 1
 
 meshes = [RectangleMesh(MPI.comm_self, Point(0,0), Point(1,1), 2**l, 2**l) for l in range(buf, n_levels+buf)][::-1]
 
@@ -71,15 +71,7 @@ class PoissonProblem(BLUEProblem):
 
             Pf = assemble(sol*sol*dx)
 
-            if l < M-2:
-                Vc = function_spaces[l+1]
-                solc = compute_solution(Vc, samples[i])
-                Pc = assemble(solc*solc*dx)
-            else:
-                Pc = 0.0
-
             out[0][i] = Pf
-            out[1][i] = Pf - Pc
 
         return out
 
@@ -129,8 +121,8 @@ C = problem.get_covariance()
 true_C = C.copy()
 
 d = np.diag(C)
-delv = np.diag(problem.get_covariance(1))
-covest_ex = (d[:-1] + d[1:] - delv[:-1])/2
+delv = problem.get_mlmc_variance()[0,1:]
+covest_ex = (d[:-1] + d[1:] - delv)/2
 
 vals = np.array(problem.evaluate(list(range(M)), [np.zeros(4) for i in range(M)])[0])
 valdiff = abs(vals[:-1]-vals[1:])
@@ -175,6 +167,7 @@ err = np.sqrt((v0-true_C[0,0])**2 + (v1 - true_C[1,1])**2 + (c01 - true_C[0,1])*
 
 if verbose: print("Covariance estimattion errors. Matrix rel err: ", rel_err, "Entries abs err: ", err)
 
+perform_variance_test = False
 if perform_variance_test:
     err_ex, err = problem.variance_test(eps=eps, K=3, N=100)
     if verbose: print(err_ex, err)

@@ -1,6 +1,7 @@
 import pygmsh
 import meshio
 import sys
+import os
 
 def create_mesh(mesh, cell_type, prune_z=False):
     cells = mesh.get_cells_type(cell_type)

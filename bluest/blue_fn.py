@@ -1,11 +1,12 @@
 # blue function for coupled levels
 
-from numpy import zeros, array, isfinite, ndarray
+from numpy import zeros, array, isfinite, ndarray, savez_compressed, load
 from numpy.random import RandomState
 from numpy import sum as npsum
 from time import time
 from shutil import get_terminal_size
 from mpi4py.MPI import COMM_WORLD, SUM
+import os
 
 cols = get_terminal_size()[0]
 if cols == 0: cols = 80 # if ran with MPI 0 cols is returned due to a bug
@@ -26,8 +27,7 @@ def is_output_finite(Ps):
 
     return True,None,None
 
-
-def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No = 1, verbose=True):
+def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No = 1, verbose=True, compute_mlmc_differences=False, filename=None):
     """
     Inputs:
         ls: tuple with the indices of the coupled models to sample from
@@ -36,14 +36,18 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
               problem.evaluate(ls, samples) returns coupled list of
               samples Ps[n][i] corresponding to output n and model ls[i].
               Optionally, user-defined problem.cost
-        comm: the MPI communicator between the sampling groups
         sampler: sampling function, by default standard Normal.
             input: N, ls
             output: samples list so that samples[i] is the model
             ls[i] sample.
-         N1: number of paths to generate concurrently.
-         No: number of outputs.
-         verbose: boolean flag that turns progress bar on (True) or off (False)
+        N1: number of paths to generate concurrently.
+        No: number of outputs.
+        comm: (optional) the MPI communicator between the sampling groups
+        inners: (optional) list of length No of Python functions so that
+                inners[n] implements an inner product suitable for output n.
+        verbose: boolean flag that turns progress bar on (True) or off (False)
+        filename: (optional) string containing a filename where to store the
+                  computed samples.
 
     Outputs:
         (sumse, sumsc, cost) where sumse, sumsc are
@@ -58,6 +62,9 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
     cpu_cost = 0.0
     sumse = [[0 for i in range(L)] for n in range(No)]
     sumsc = [zeros((L,L)) for n in range(No)]
+    if compute_mlmc_differences:
+        sumsd1 = [[[0 for j in range(L)] for i in range(L)] for n in range(No)]
+        sumsd2 = [[[0 for j in range(L)] for i in range(L)] for n in range(No)]
 
     verbose = verbose and COMM_WORLD.Get_rank() == 0
 
@@ -81,6 +88,12 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
         fmtstr = '{0: <%d}' % part
         print("\rSampling models %s [%s] %d%%" % (ls, fmtstr.format(''), 0), end="\r", flush=True)
 
+    if filename is not None:
+        ext = "." + filename.split(".")[-1]
+        basename = '.'.join(filename.split(".")[:-1]) + ''.join(str(l) for l in ls)
+        filename = basename + ext
+        outfilename = basename + "_%d" % mpiRank + ext
+        outdict = {"values" : [], "inputs" : []}
 
     nprocs  = min(mpiSize,max(N,1))
     NN      = [N//nprocs]*nprocs 
@@ -103,6 +116,23 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
                 print("Warning! Problem evaluation returned inf or NaN value for model %d and output %d. Resampling..." % (model_n,output_n), flush=True)
 
         cpu_cost += end - start # cost defined as total computational time
+
+        if filename is not None:
+            outdict["values"].append(Ps)
+            outdict["inputs"].append(samples)
+
+        if compute_mlmc_differences:
+            for n in range(No):
+                for i in range(L):
+                    for j in range(i+1, L):
+                        if N1 == 1:
+                            sumsd1[n][i][j] += Ps[n][i] - Ps[n][j]
+                            sumsd2[n][i][j] += inners[n](Ps[n][i] - Ps[n][j], Ps[n][i] - Ps[n][j])
+                        else:
+                            for n2 in range(N2):
+                                sumsd1[n][i][j] += Ps[n][i][n2] - Ps[n][j][n2]
+                                sumsd2[n][i][j] += inners[n](Ps[n][i][n2] - Ps[n][j][n2], Ps[n][i][n2] - Ps[n][j][n2])
+
         for n in range(No):
             if N1 == 1:
                 for i in range(L):
@@ -128,5 +158,43 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
         for i in range(L):
             #NOTE: if sumse[n][i] is a scalar or a numpy array the following works
             sumse[n][i] = comm.allreduce(sumse[n][i], op = SUM)
+            if compute_mlmc_differences:
+                for j in range(i+1, L):
+                    sumsd1[n][i][j] = comm.allreduce(sumsd1[n][i][j], op = SUM)
+                    sumsd2[n][i][j] = comm.allreduce(sumsd2[n][i][j], op = SUM)
 
-    return (sumse, sumsc, cost)
+    if filename is not None:
+        if mpiRank != 0:
+            savez_compressed(outfilename, **outdict)
+        comm.barrier()
+        if mpiRank == 0:
+            for rank in range(1,mpiSize):
+                outfilename = basename + "_%d" % rank + ext
+                nextdict = load(outfilename)
+                outdict["values"] += [item for item in nextdict["values"]]
+                outdict["inputs"] += [item for item in nextdict["inputs"]]
+                os.remove(outfilename)
+
+            outdict["models"] = ls
+            outdict["n_samples"] = N
+            outdict["n_outputs"] = No
+
+            if os.path.isfile(filename):
+                old_dict = dict(load(filename))
+                old_dict["values"] = [item for item in old_dict["values"]]
+                old_dict["inputs"] = [item for item in old_dict["inputs"]]
+                assert old_dict["models"] == ls
+                assert old_dict["n_outputs"] == outdict["n_outputs"]
+                old_dict["values"] += outdict["values"]
+                old_dict["inputs"] += outdict["inputs"]
+                old_dict["n_samples"] += N
+                outdict = old_dict
+                
+            savez_compressed(filename, **outdict)
+        
+        comm.barrier()
+
+    if compute_mlmc_differences:
+        return (sumse, sumsc, cost, sumsd1, sumsd2)
+    else:
+        return (sumse, sumsc, cost)

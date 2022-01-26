@@ -23,6 +23,8 @@ default_params = {
                     "optimization_solver" : "cvxpy",
                     "covariance_estimation_samples" : 100,
                     "sample_batch_size": 1,
+                    "samplefile" : None,
+                    "skip_projection" : False,
                     "spg_params" : spg_default_params,
                     }
 
@@ -36,7 +38,7 @@ def next_divisible_number(x, n):
 
 # Are any checks on the correlation matrix necessary?
 class BLUEProblem(object):
-    def __init__(self, M, C=None, costs=None, datafile=None, n_outputs=1, **params):
+    def __init__(self, M, C=None, costs=None, mlmc_variances=None, datafile=None, n_outputs=1, **params):
         '''
             INPUT:
 
@@ -79,11 +81,14 @@ class BLUEProblem(object):
             self.G = [self.get_model_graph(C[n], costs=costs) for n in range(n_outputs)]
             self.SG = [list(range(M)) for n in range(n_outputs)]
 
+            if mlmc_variances is None: self.dV = [np.nan*np.ones((M,M)) for n in range(n_outputs)]
+            else: self.dV = mlmc_variances
+
             if costs is None: self.estimate_costs(self.get_comm().Get_size())
             self.check_costs(warning=True) # Sending a warning just in case
             
             self.estimate_missing_covariances(next_divisible_number(self.params["covariance_estimation_samples"], self.mpiSize))
-            if not self.params.get("skip_projection", False):
+            if not self.params["skip_projection"]:
                 self.project_covariances()
 
             self.check_graphs(remove_uncorrelated=self.params["remove_uncorrelated"])
@@ -135,6 +140,12 @@ class BLUEProblem(object):
             message_warning = "WARNING! Model zero is not the most expensive model and some estimators won't run in this setting. The more expensive models are: %s" % more_expensive_models
             if warning and self.warning: print(message_warning)
             else: raise ValueError(message_error)
+
+    def get_mlmc_variances(self):
+        return self.dV
+
+    def get_mlmc_variance(self, n=0):
+        return self.dV[n]
 
     def get_covariances(self):
         return [self.get_covariance(n) for n in range(self.n_outputs)]
@@ -201,6 +212,13 @@ class BLUEProblem(object):
         H = nx.relabel_nodes(H, mapping)
         self.G[n] = H
 
+        dVn = self.dV[n].copy()
+        for iold,inew in mapping.items():
+            for jold,jnew in mapping.items():
+                dVn[iold,jold] = self.dV[n][inew,jnew]
+
+        self.dV[n] = dVn
+
     def get_model_graph(self, C, costs=None):
         '''
            Creates a graph of the models available from
@@ -238,7 +256,7 @@ class BLUEProblem(object):
         if self.mpiRank == 0:
             C_dict = {"C%d" % n : nx.adjacency_matrix(self.G[n]).toarray() for n in range(self.n_outputs)}
             costs = self.get_costs()
-            np.savez(filename, M = self.M, n_outputs = self.n_outputs, costs=costs, **C_dict, SG=self.SG)
+            np.savez(filename, M = self.M, n_outputs = self.n_outputs, costs=costs, **C_dict, SG=self.SG, dV=self.dV)
 
         COMM_WORLD.barrier()
 
@@ -264,6 +282,11 @@ class BLUEProblem(object):
             self.G.append(GG)
 
         self.SG = data["SG"].tolist()[:self.n_outputs]
+        dV = data.get("dV", None)
+        if dV is None:
+            self.dV = [np.nan*np.ones((self.M,self.M)) for n in range(self.n_outputs)]
+        else:
+            self.dV = [dV[n] for n in range(self.n_outputs)]
 
     def check_graphs(self, remove_uncorrelated=False):
         for n in range(self.n_outputs):
@@ -322,9 +345,16 @@ class BLUEProblem(object):
         C = [nx.adjacency_matrix(self.G[n]).toarray() for n in range(self.n_outputs)]
         ls = list(np.where(np.isnan(np.sum(sum(C),1)))[0])
         if len(ls) == 0: return
-        sumse,sumsc,cost = self.blue_fn(ls, N)
+        sumse,sumsc,cost,sumsd1,sumsd2 = self.blue_fn(ls, N, compute_mlmc_differences=True)
         inners = self.get_models_inner_products()
         C_hat = [sumsc[n]/N - self.outer(sumse[n],sumse[n],inners[n])/N**2 for n in range(self.n_outputs)]
+
+        for n in range(self.n_outputs):
+            for i in range(len(ls)):
+                for j in range(i+1, len(ls)):
+                    if not np.isfinite(self.dV[n][ls[i],ls[j]]):
+                        self.dV[n][ls[i],ls[j]] = sumsd2[n][i][j]/N - inners[n](sumsd1[n][i][j]/N,sumsd1[n][i][j]/N)
+
         for n in range(self.n_outputs):
             for i,j,c in self.G[n].edges(data=True):
                 if np.isnan(c['weight']):
@@ -408,8 +438,8 @@ class BLUEProblem(object):
 
     #################### SOLVERS #######################
 
-    def blue_fn(self, ls, N, verbose=True):
-        return blue_fn(ls, N, self, sampler=self.sampler, inners=self.get_models_inner_products(), comm = self.get_comm(), N1=self.params["sample_batch_size"], No=self.n_outputs, verbose=verbose)
+    def blue_fn(self, ls, N, verbose=True, compute_mlmc_differences=False):
+        return blue_fn(ls, N, self, sampler=self.sampler, inners=self.get_models_inner_products(), comm = self.get_comm(), N1=self.params["sample_batch_size"], No=self.n_outputs, compute_mlmc_differences=compute_mlmc_differences, verbose=verbose, filename=self.params["samplefile"])
 
     def setup_solver(self, K=3, budget=None, eps=None, groups=None, multi_groups=None, solver=None, integer=False):
         if budget is None and eps is None: raise ValueError("Need to specify either budget or RMSE tolerance")
@@ -566,6 +596,12 @@ class BLUEProblem(object):
         min_cost = np.inf
         best_data = [{} for n in range(self.n_outputs)]
         CC = self.get_covariances()
+        dV = self.get_mlmc_variances()
+
+        # this is only True if all dVn are entirely populated with NaNs/infs
+        if not any(np.isfinite(dVn).any() for dVn in dV):
+            if self.mpiRank == 0: print("\nWarning! MLMC variances were not provided nor estimated. The resulting MLMC estimator might be suboptimal.\nThe estimation and use of MLMC variances is a new feature so this warning might be caused by an old datafile. To fix this, delete the old datafile and re-run the covariance estimation routine.\n")
+
         for group in groups:
             assert group[0] == 0
             mlmc_data_list = [{} for n in range(self.n_outputs)]
@@ -577,6 +613,14 @@ class BLUEProblem(object):
                 if len(group) > 1:
                     v,corrs = np.diag(subC).copy(), np.diag(subC,1)
                     v[:-1]    += v[1:] - 2*corrs
+                    # if better value available from dV, then use it
+                    for i in range(len(group)-1):
+                        ii = min(group[i], group[i+1])
+                        jj = max(group[i], group[i+1])
+                        check = dV[n][ii,jj]
+                        if np.isfinite(check):
+                            v[i] = check
+
                     subw[:-1] += subw[1:]
                 else: v = subC[0]
                 feasible, mlmc_data_list[n] = attempt_mlmc_setup(v, subw, budget=budget, eps=eps[n])
