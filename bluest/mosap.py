@@ -1,6 +1,6 @@
 import numpy as np
 from itertools import combinations, product
-from .sap import SAP,mosek_params
+from .sap import SAP,mosek_params,cvxpy_default_params
 from .misc import best_closest_integer_solution_BLUE_multi
 
 import cvxpy as cp
@@ -93,7 +93,7 @@ class MOSAP(object):
         Vars = np.array([item[1] for item in out])
         return mus,Vars
 
-    def solve(self, budget=None, eps=None, solver="cvxpy", integer=False, x0=None):
+    def solve(self, budget=None, eps=None, solver="cvxpy", integer=False, x0=None, solver_params=None):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         if solver not in ["gurobi", "scipy", "cvxpy"]:
@@ -103,7 +103,7 @@ class MOSAP(object):
         if eps is None:
             print("Minimizing statistical error for fixed cost...\n")
             if   solver == "gurobi": samples = self.gurobi_solve(budget=budget, integer=integer)
-            elif solver == "cvxpy":  samples = self.cvxpy_solve(budget=budget)
+            elif solver == "cvxpy":  samples = self.cvxpy_solve(budget=budget, cvxpy_params=solver_params)
             elif solver == "scipy":  samples = self.scipy_solve(budget=budget, x0=x0)
 
             if not integer:
@@ -119,7 +119,7 @@ class MOSAP(object):
             print("Minimizing cost given statistical error tolerance...\n")
             if   solver == "gurobi": samples = self.gurobi_solve(eps=eps, integer=integer)
             elif solver == "scipy":  samples = self.scipy_solve(eps=eps, x0=x0)
-            elif solver == "cvxpy":  samples = self.cvxpy_solve(eps=eps)
+            elif solver == "cvxpy":  samples = self.cvxpy_solve(eps=eps, cvxpy_params=solver_params)
 
             if not integer:
                 objective  = lambda m : m@self.costs
@@ -210,7 +210,7 @@ class MOSAP(object):
         out = [bmat >> 0 for bmat in bmats]
         return out
 
-    def cvxpy_solve(self, budget=None, eps=None, delta=0.0):
+    def cvxpy_solve(self, budget=None, eps=None, delta=0.0, cvxpy_params=None):
         budget, eps = self.check_input(budget, eps)
 
         L        = self.L
@@ -218,6 +218,10 @@ class MOSAP(object):
         w        = self.costs
         e        = self.e
         mappings = self.mappings
+
+        cvxpy_solver_params = cvxpy_default_params.copy()
+        if cvxpy_params is not None:
+            cvxpy_solver_params.update(cvxpy_params)
 
         scales = np.array([1/abs(self.SAPS[n].psi).sum(axis=0).mean() for n in range(No)])
 
@@ -237,7 +241,7 @@ class MOSAP(object):
         
         #prob.solve(verbose=True, solver="SCS", acceleration_lookback=0, acceleration_interval=0)
         #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
-        prob.solve(verbose=True, solver="CVXOPT", abstol=1.0e-8, reltol=1.e-5, max_iters=1000, feastol=1.0e-6, kttsolver='chol',refinement=2)
+        prob.solve(verbose=True, solver="CVXOPT", **cvxpy_solver_params)
 
         if budget is not None: m.value *= budget
 
