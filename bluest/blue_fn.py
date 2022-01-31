@@ -190,9 +190,9 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
                     outdict[key] += [item for item in nextdict[key]]
                 os.remove(outfilename)
 
-            outdict["models"] = ls
-            outdict["n_samples"] = N
-            outdict["n_outputs"] = No
+            outdict["models"] = array([ls])
+            outdict["n_samples"] = array([N])
+            outdict["n_outputs"] = array([No])
 
             if os.path.isfile(filename):
                 old_dict = dict(load(filename, allow_pickle=True))
