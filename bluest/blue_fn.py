@@ -27,6 +27,11 @@ def is_output_finite(Ps):
 
     return True,None,None
 
+def flatten_nested_list(X):
+    if isinstance(X, ndarray): return X.flatten()
+    elif isinstance(X, (tuple, list)): return [flatten_nested_list(item) for item in X]
+    return X
+
 def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No = 1, verbose=True, compute_mlmc_differences=False, filename=None):
     """
     Inputs:
@@ -93,7 +98,8 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
         basename = '.'.join(filename.split(".")[:-1]) + ''.join(str(l) for l in ls)
         filename = basename + ext
         outfilename = basename + "_%d" % mpiRank + ext
-        outdict = {"values" : [], "inputs" : []}
+        outdict = {"values_%d_%d" % (n,i) : [] for n in range(No) for i in range(L)}
+        outdict.update({"inputs_%d" % i : [] for i in range(L)})
 
     nprocs  = min(mpiSize,max(N,1))
     NN      = [N//nprocs]*nprocs 
@@ -118,8 +124,17 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
         cpu_cost += end - start # cost defined as total computational time
 
         if filename is not None:
-            outdict["values"].append(Ps)
-            outdict["inputs"].append(samples)
+            Ps_flat = flatten_nested_list(Ps)
+            samples_flat = flatten_nested_list(samples)
+            for n in range(No):
+                for i in range(L):
+                    if N1 == 1:
+                        outdict["values_%d_%d" % (n,i)].append(Ps[n][i])
+                        outdict["inputs_%d" % i].append(samples[i])
+                    else:
+                        for n2 in range(N2):
+                            outdict["values_%d_%d" % (n,i)].append(Ps[n][i][n2])
+                            outdict["inputs_%d" % i].append(samples[i][n2])
 
         if compute_mlmc_differences:
             for n in range(No):
@@ -170,9 +185,9 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
         if mpiRank == 0:
             for rank in range(1,mpiSize):
                 outfilename = basename + "_%d" % rank + ext
-                nextdict = load(outfilename)
-                outdict["values"] += [item for item in nextdict["values"]]
-                outdict["inputs"] += [item for item in nextdict["inputs"]]
+                nextdict = load(outfilename, allow_pickle=True)
+                for key in outdict.keys():
+                    outdict[key] += [item for item in nextdict[key]]
                 os.remove(outfilename)
 
             outdict["models"] = ls
@@ -180,13 +195,14 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
             outdict["n_outputs"] = No
 
             if os.path.isfile(filename):
-                old_dict = dict(load(filename))
-                old_dict["values"] = [item for item in old_dict["values"]]
-                old_dict["inputs"] = [item for item in old_dict["inputs"]]
+                old_dict = dict(load(filename, allow_pickle=True))
+                for key in old_dict.keys():
+                    old_dict[key] = [item for item in old_dict[key]]
                 assert old_dict["models"] == ls
                 assert old_dict["n_outputs"] == outdict["n_outputs"]
-                old_dict["values"] += outdict["values"]
-                old_dict["inputs"] += outdict["inputs"]
+                for key in old_dict.keys():
+                    if "values" in key or "inputs" in key:
+                        old_dict[key] += outdict[key]
                 old_dict["n_samples"] += N
                 outdict = old_dict
                 
