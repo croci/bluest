@@ -38,7 +38,7 @@ setuptools.setup(
     ],
     packages=["bluest"],
     package_dir={"bluest": "bluest"},
-    python_requires=">=3.7",
+    python_requires=">=3.6",
     install_requires=['pybind11'],
     setup_requires=['pybind11'],
     has_ext_modules=lambda: True,
