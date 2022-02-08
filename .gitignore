@@ -5,6 +5,7 @@ __pycache__
 *.msh
 *.h5
 *.vtk
+*.pvd
 *.vtu
 *.xdmf
 *.so

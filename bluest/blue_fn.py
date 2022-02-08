@@ -32,7 +32,7 @@ def flatten_nested_list(X):
     elif isinstance(X, (tuple, list)): return [flatten_nested_list(item) for item in X]
     return X
 
-def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No = 1, verbose=True, compute_mlmc_differences=False, filename=None):
+def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No = 1, verbose=True, compute_mlmc_differences=False, filename=None, outputs_to_save=None):
     """
     Inputs:
         ls: tuple with the indices of the coupled models to sample from
@@ -100,6 +100,7 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
         outfilename = basename + "_%d" % mpiRank + ext
         outdict = {"values_%d_%d" % (n,i) : [] for n in range(No) for i in range(L)}
         outdict.update({"inputs_%d" % i : [] for i in range(L)})
+        if outputs_to_save is None: outputs_to_save = list(range(No))
 
     nprocs  = min(mpiSize,max(N,1))
     NN      = [N//nprocs]*nprocs 
@@ -127,14 +128,15 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
             Ps_flat = flatten_nested_list(Ps)
             samples_flat = flatten_nested_list(samples)
             for n in range(No):
-                for i in range(L):
-                    if N1 == 1:
-                        outdict["values_%d_%d" % (n,i)].append(Ps[n][i])
-                        outdict["inputs_%d" % i].append(samples[i])
-                    else:
-                        for n2 in range(N2):
-                            outdict["values_%d_%d" % (n,i)].append(Ps[n][i][n2])
-                            outdict["inputs_%d" % i].append(samples[i][n2])
+                if n in outputs_to_save:
+                    for i in range(L):
+                        if N1 == 1:
+                            outdict["values_%d_%d" % (n,i)].append(Ps[n][i])
+                            outdict["inputs_%d" % i].append(samples[i])
+                        else:
+                            for n2 in range(N2):
+                                outdict["values_%d_%d" % (n,i)].append(Ps[n][i][n2])
+                                outdict["inputs_%d" % i].append(samples[i][n2])
 
         if compute_mlmc_differences:
             for n in range(No):

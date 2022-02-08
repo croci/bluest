@@ -119,6 +119,9 @@ def save_and_plot(w, name):
     u, p = w.split()
 
     # Store to file
+    File("results_{}/u.pvd".format(name)) << u
+    File("results_{}/p.pvd".format(name)) << p
+
     with XDMFFile("results_{}/u.xdmf".format(name)) as f:
         f.write(u)
     with XDMFFile("results_{}/p.xdmf".format(name)) as f:
@@ -172,8 +175,8 @@ def tasks_1_2_3_4():
     nu = 0.0005 # Re = 2/3*U*d/nu = 2/3*0.3*0.1/nu = 0.02/nu. For nu = 0.001, Re = 20
 
     # Discretization parameters
-    N_circle = 32
-    N_bulk = 64
+    N_circle = 128
+    N_bulk = 128
 
     # Prepare function space, BCs and measure on circle
     W, bndry, ds_circle1, ds_circle2 = build_space(N_circle, N_circle, N_bulk)
@@ -269,5 +272,5 @@ if __name__ == "__main__":
     #cost_estimation([64,32,16])
 
     tasks_1_2_3_4()
-    tasks_5_6()
+    #tasks_5_6()
 
