@@ -9,7 +9,8 @@ set_log_level(LogLevel.ERROR)
 
 mpi_comm = MPI.comm_world
 
-T = 100 # ms
+T = 20 # ms
+T0 = 2.0
 dt = 0.05
 N = int(np.ceil(T/dt))
 t = np.linspace(0,T,N+1)
@@ -45,13 +46,6 @@ betah  = lambda v : 1/(1 + np.exp(3-v/10))
 ninf   = lambda v : alphan(v)/(alphan(v) + betan(v))
 minf   = lambda v : alpham(v)/(alpham(v) + betam(v))
 hinf   = lambda v : alphah(v)/(alphah(v) + betah(v))
-
-an = lambda v : 0.01*(10-v)/(exp(1-v/10)-1)
-am = lambda v : 0.1*(25-v)/(exp(2.5-v/10)-1)
-ah = lambda v : 0.07*exp(-v/20)
-bn = lambda v : exp(-v/80)/8
-bm = lambda v : 4*exp(-v/18)
-bh = lambda v : 1/(1 + exp(3-v/10))
 
 veq = (vk*gk*ninf(0)**4 + gna*vna*minf(0)**3*hinf(0) + gl*vl)/(gk*ninf(0)**4 + gna*minf(0)**3*hinf(0) + gl)
 
@@ -204,7 +198,7 @@ def FN_residual(w0, t):
 Vout = []
 Vfnout = []
 
-kappa = mesh.hmax()*dt/T
+kappa = mesh.hmax()*dt/(T-T0)
 peak = 0
 peak_fn = 0
 currs = np.zeros((4,))
@@ -233,8 +227,9 @@ for i in range(1,N+1):
 
     peak = max(peak, max(v_vals))
     peak_fn = max(peak_fn, max(vfn_vals))
-    currs    += kappa*currents
-    currs_fn += kappa*currents_fn
+    if i*dt > T0:
+        currs    += kappa*currents
+        currs_fn += kappa*currents_fn
 
     if i%10 == 0:
         print(assemble(v0*v0*dx), assemble(v0fn*v0fn*dx))
