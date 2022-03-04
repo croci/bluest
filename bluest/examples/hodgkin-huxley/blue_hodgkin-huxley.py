@@ -334,13 +334,15 @@ class NeuronProblem(object):
         self.solve('HH', params=params, save=save, verbose=verbose)
         self.solve('FN', params=params, save=save, verbose=verbose)
 
+no_Na_curr = False
+
 mesh_sizes = [16,   32,    64][::-1]
 timesteps  = [0.025, 0.0125, 0.00625][::-1]
 neuron_problems = [NeuronProblem(N, dt, T=20) for N,dt in zip(mesh_sizes,timesteps)]
 
 Np = len(neuron_problems)
 M = 4*Np
-No = 5
+No = 5 - int(no_Na_curr)
 
 costs = np.array([problem.M*problem.W.dim() for problem in neuron_problems] + [problem.M*problem.Wfn.dim() for problem in neuron_problems] + [4*problem.M for problem in neuron_problems] + [2*problem.M for problem in neuron_problems]); costs = costs/min(costs)
 
@@ -374,6 +376,8 @@ class BLUENeuronProblem(BLUEProblem):
             if pde: outputs = neuron_problems[problem_n].solve(model_to_run, params=tuple(samples[i]))
             else:   outputs = neuron_problems[problem_n].solve_ODE(model_to_run, params=tuple(samples[i]))
 
+            if no_Na_curr: outputs = [item for i,item in enumerate(outputs) if i != 2]
+
             for n in range(No):
                 out[n][i] = outputs[n]
 
@@ -383,6 +387,10 @@ if __name__ == '__main__':
     run_single = True
     try: sys.argv[1]
     except IndexError: run_single = False
+
+    filename = './model_graph_data.npz'
+    if no_Na_curr:
+        filename = './model_graph_data_no_Na_curr.npz'
 
     if run_single:
         N = 32
@@ -395,17 +403,17 @@ if __name__ == '__main__':
     else:
         if mpiRank == 0: print(costs)
 
-        load_model_graph = os.path.exists("./model_graph_data.npz")
+        load_model_graph = os.path.exists(filename)
         if load_model_graph:
-            problem = BLUENeuronProblem(M, n_outputs=No, costs = costs, datafile="./model_graph_data.npz")
+            problem = BLUENeuronProblem(M, n_outputs=No, costs = costs, datafile=filename)
         else:
-            problem = BLUENeuronProblem(M, n_outputs=No, costs=costs, covariance_estimation_samples=max(min(200,mpiSize*50),50))
-            problem.save_graph_data("./model_graph_data.npz")
+            problem = BLUENeuronProblem(M, n_outputs=No, costs=costs, covariance_estimation_samples=max(min(100,mpiSize*50),50))
+            problem.save_graph_data(filename)
 
         C = problem.get_covariances()
 
         vals = np.array([c[0,0] for c in C])
-        eps = np.sqrt(vals)/10; budget = None
+        eps = np.sqrt(vals)/100; budget = None
 
         out_BLUE = problem.setup_solver(K=3, budget=budget, eps=eps)
         out_MLMC = problem.setup_mlmc(eps=eps, budget=budget)
