@@ -2,8 +2,8 @@ from dolfin import *
 from bluest import *
 import numpy as np
 from numpy.random import RandomState
-import matplotlib.pyplot as plt
 from mpi4py import MPI
+import sys
 import os
 
 import logging
@@ -63,20 +63,23 @@ ics = (V0, n0, m0, h0)
 
 Vfn0 = veq
 nfn0 = n0
-hbar = ninf(V0 - veq) + hinf(V0 - veq)
-ics_fn = (V0, n0)
+hbar = ninf(Vfn0 - veq) + hinf(Vfn0 - veq)
+ics_fn = (Vfn0, nfn0)
 
 ################################################################################################################
 
 class NeuronProblem(object):
     def __init__(self, N, dt, T = 20, mpi_comm = MPI.COMM_SELF):
 
+        self.N = N
+        self.T = T
+
         self.T0 = 2.0
         self.M = int(np.ceil(T/dt))
         self.dt = T/self.M
 
         mesh = UnitIntervalMesh(mpi_comm, N)
-        self.kappa = mesh.hmax()*self.dt/(T-self.T0)
+        self.kappa = mesh.hmax()*self.dt/(self.T-self.T0)
 
         fe = FiniteElement('CG', mesh.ufl_cell(), 1)
         me = MixedElement([fe, fe, fe, fe])
@@ -250,20 +253,96 @@ class NeuronProblem(object):
         if verbose: print(peak, currs)
         return [peak] + list(currs)
 
-    def solve_both(self, params=avg_params, save=True, verbose=True):
+
+    def solve_ODE(self, model, params=avg_params, save=False, verbose=False, plot=False):
+
+        M  = 2*self.M
+        dt = self.dt/2
+        t = np.linspace(0,self.T, M+1)
+        kappa = dt/(self.T-self.T0)
+
+        Cm,I,eps = params
+
+        if model == 'HH':
+            # H-H variables
+            V = np.zeros((M+1,)); V[0] = ics[0]
+            n = np.zeros((M+1,)); n[0] = ics[1]
+            m = np.zeros((M+1,)); m[0] = ics[2]
+            h = np.zeros((M+1,)); h[0] = ics[3]
+
+            filename = './results/voltage.npz'
+
+        else:
+            # F-N variables
+            V = np.zeros((M+1,)); V[0] = ics_fn[0]
+            n = np.zeros((M+1,)); n[0] = ics_fn[1]
+
+            filename = './results/voltage_fn.npz'
+
+        currs = np.zeros((4,))
+
+        for i in range(M):
+            if model == 'HH':
+                # Hodgkin-Huxley
+                Dn = alphan(V[i]-veq)*(1-n[i]) - betan(V[i]-veq)*n[i]
+                Dm = alpham(V[i]-veq)*(1-m[i]) - betam(V[i]-veq)*m[i]
+                Dh = alphah(V[i]-veq)*(1-h[i]) - betah(V[i]-veq)*h[i]
+                n[i+1] = n[i] + dt*Dn
+                m[i+1] = m[i] + dt*Dm
+                h[i+1] = h[i] + dt*Dh
+
+                Ina = gna*m[i]**3*h[i]*(V[i] - vna)
+                Ik  = gk*n[i]**4*(V[i] - vk)
+                Il  = gl*(V[i] - vl)
+
+                DV = (1/Cm)*(I - (Ina + Ik + Il))
+                V[i+1] = V[i] + dt*DV
+
+                if i*dt > self.T0:
+                    currs += kappa*np.array([Cm*DV, Ina, Ik, Il])
+
+            else:
+                # Fitzhugh-Nagumo
+                Dn = alphan(V[i]-veq)*(1-n[i]) - betan(V[i]-veq)*n[i]
+                n[i+1] = n[i] + dt*Dn
+
+                Ina = gna*minf(V[i]-veq)**3*(hbar - n[i])*(V[i] - vna)
+                Ik  = gk*n[i]**4*(V[i] - vk)
+                Il  = gl*(V[i] - vl)
+
+                DV = (1/Cm)*(I - (Ina + Ik + Il))
+                V[i+1] = V[i] + dt*DV
+                
+                if i*dt > self.T0:
+                    currs += kappa*np.array([Cm*DV, Ina, Ik, Il])
+
+        peak = max(V)
+
+        if verbose: print(peak, currs)
+        if save: np.savez(filename, t=t, v=V)
+
+        if plot:
+            import matplotlib.pyplot as plt
+            plt.plot(t, V)
+            plt.show()
+
+        return [peak] + list(currs)
+
+    def solve_all(self, params=avg_params, save=True, verbose=True, plot=True):
+        self.solve_ODE('HH', params=params, save=save, verbose=verbose, plot=plot)
+        self.solve_ODE('FN', params=params, save=save, verbose=verbose, plot=plot)
         self.solve('HH', params=params, save=save, verbose=verbose)
         self.solve('FN', params=params, save=save, verbose=verbose)
 
-
 mesh_sizes = [16,   32,    64][::-1]
-timesteps  = [0.05, 0.025, 0.0125][::-1]
+timesteps  = [0.025, 0.0125, 0.00625][::-1]
 neuron_problems = [NeuronProblem(N, dt, T=20) for N,dt in zip(mesh_sizes,timesteps)]
 
 Np = len(neuron_problems)
-M = 2*Np
+M = 4*Np
 No = 5
 
-costs = np.array([problem.M*problem.W.dim() for problem in neuron_problems] + [problem.M*problem.Wfn.dim() for problem in neuron_problems]); costs = costs/min(costs)
+costs = np.array([problem.M*problem.W.dim() for problem in neuron_problems] + [problem.M*problem.Wfn.dim() for problem in neuron_problems] + [4*problem.M for problem in neuron_problems] + [2*problem.M for problem in neuron_problems]); costs = costs/min(costs)
 
 class BLUENeuronProblem(BLUEProblem):
     def sampler(self, ls, N=1):
@@ -290,8 +369,10 @@ class BLUENeuronProblem(BLUEProblem):
 
             l = ls[i]
             problem_n = l%Np
-            model_to_run = ['HH', 'FN'][l//Np]
-            outputs = neuron_problems[problem_n].solve(model_to_run, params=tuple(samples[i]))
+            model_to_run = ['HH', 'FN'][(l//Np)%2]
+            pde = bool((l//Np) < 2)
+            if pde: outputs = neuron_problems[problem_n].solve(model_to_run, params=tuple(samples[i]))
+            else:   outputs = neuron_problems[problem_n].solve_ODE(model_to_run, params=tuple(samples[i]))
 
             for n in range(No):
                 out[n][i] = outputs[n]
@@ -299,15 +380,17 @@ class BLUENeuronProblem(BLUEProblem):
         return out
 
 if __name__ == '__main__':
-    run_single = False
+    run_single = True
+    try: sys.argv[1]
+    except IndexError: run_single = False
 
     if run_single:
         N = 32
-        dt = 0.05
+        dt = 0.025
         T = 20
 
         problem = NeuronProblem(N, dt, T=T, mpi_comm=MPI.COMM_WORLD)
-        problem.solve_both()
+        problem.solve_all()
 
     else:
         if mpiRank == 0: print(costs)
