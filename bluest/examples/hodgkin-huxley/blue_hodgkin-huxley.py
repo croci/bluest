@@ -344,7 +344,7 @@ Np = len(neuron_problems)
 M = 4*Np
 No = 5 - int(no_Na_curr)
 
-costs = np.array([problem.M*problem.W.dim() for problem in neuron_problems] + [problem.M*problem.Wfn.dim() for problem in neuron_problems] + [4*problem.M for problem in neuron_problems] + [2*problem.M for problem in neuron_problems]); costs = costs/min(costs)
+costs = np.array([problem.M*problem.W.dim()**3 for problem in neuron_problems] + [problem.M*problem.Wfn.dim()**3 for problem in neuron_problems] + [4*problem.M for problem in neuron_problems] + [2*problem.M for problem in neuron_problems]); costs = costs/min(costs)
 
 class BLUENeuronProblem(BLUEProblem):
     def sampler(self, ls, N=1):
@@ -415,6 +415,9 @@ if __name__ == '__main__':
         vals = np.array([c[0,0] for c in C])
         eps = np.sqrt(vals)/100; budget = None
 
-        out_BLUE = problem.setup_solver(K=3, budget=budget, eps=eps)
+        out_BLUE = problem.setup_solver(K=5, budget=budget, eps=eps)
         out_MLMC = problem.setup_mlmc(eps=eps, budget=budget)
         out_MFMC = problem.setup_mfmc(eps=eps, budget=budget)
+
+        print("\n\n\n", out_BLUE, "\n\n", out_MLMC, "\n\n", out_MFMC)
+        np.savez("samples.npz",samples=out_BLUE["samples"])

@@ -9,9 +9,9 @@ set_log_level(LogLevel.ERROR)
 
 mpi_comm = MPI.comm_world
 
-T = 20 # ms
+T = 200 # ms
 T0 = 2.0
-dt = 0.05
+dt = 0.025
 N = int(np.ceil(T/dt))
 t = np.linspace(0,T,N+1)
 dt = T/N

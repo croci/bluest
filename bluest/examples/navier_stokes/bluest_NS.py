@@ -114,5 +114,7 @@ if __name__ == "__main__":
     out_MLMC = problem.setup_mlmc(budget=budget, eps=eps)
     out_MFMC = problem.setup_mfmc(budget=budget, eps=eps)
 
+    print("\n\n\n", out_BLUE, "\n\n", out_MLMC, "\n\n", out_MFMC)
+
     #out = problem.solve()
     #if verbose: print(out)

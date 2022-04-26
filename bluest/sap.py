@@ -50,7 +50,7 @@ class SAP(object):
             for i in range(len(groupsk)):
                 idx = np.array([groupsk[i]])
                 index = (idx.T, idx)
-                invcovs[k-1].append(np.linalg.inv(C[index]))
+                invcovs[k-1].append(np.linalg.pinv(C[index]))
                 flattened_groups.append(groupsk[i])
 
             groups[k-1] = np.array(groups[k-1])
