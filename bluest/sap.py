@@ -2,7 +2,6 @@ import numpy as np
 from itertools import combinations
 
 import cvxpy as cp
-from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds
 
 from .misc import assemble_psi,get_phi_full,variance_full,variance_GH_full,PHIinvY0,best_closest_integer_solution_BLUE
 
@@ -113,8 +112,8 @@ class SAP(object):
     def solve(self, budget=None, eps=None, solver="cvxpy", integer=False, x0=None, solver_params=None):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
-        if solver not in ["gurobi", "scipy", "cvxpy"]:
-            raise ValueError("Optimization solvers available: 'gurobi', 'scipy' or 'cvxpy'")
+        if solver not in ["gurobi", "scipy", "cvxpy", "ipopt"]:
+            raise ValueError("Optimization solvers available: 'gurobi', 'scipy', 'ipopt' or 'cvxpy'")
         if integer: solver="gurobi"
 
         if eps is None:
@@ -122,6 +121,7 @@ class SAP(object):
             if   solver == "gurobi": samples = self.gurobi_solve(budget=budget, integer=integer)
             elif solver == "cvxpy":  samples = self.cvxpy_solve(budget=budget, cvxpy_params=solver_params)
             elif solver == "scipy":  samples = self.scipy_solve(budget=budget, x0=x0)
+            elif solver == "ipopt":  samples = self.ipopt_solve(budget=budget, x0=x0)
 
             if not integer:
                 ss = samples.copy()
@@ -134,6 +134,7 @@ class SAP(object):
             print("Minimizing cost given statistical error tolerance...\n")
             if   solver == "gurobi": samples = self.gurobi_solve(eps=eps, integer=integer)
             elif solver == "scipy":  samples = self.scipy_solve(eps=eps, x0=x0)
+            elif solver == "ipopt":  samples = self.ipopt_solve(eps=eps, x0=x0)
             elif solver == "cvxpy":  samples = self.cvxpy_solve(eps=eps, cvxpy_params=solver_params)
 
             if not integer:
@@ -248,6 +249,7 @@ class SAP(object):
         return cp.bmat([[PHI,ee],[ee.T,cp.reshape(t,(1,1))]])
 
     def cvxpy_solve(self, budget=None, eps=None, delta=0.0, cvxpy_params=None):
+
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
 
@@ -282,8 +284,12 @@ class SAP(object):
         return m.value
 
     def scipy_solve(self, budget=None, eps=None, x0=None):
+        from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds
+
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
+
+        delta = 0
 
         L = self.L
         w = self.costs
@@ -297,13 +303,48 @@ class SAP(object):
             constraint2 = LinearConstraint(w, -np.inf, budget)
 
             if x0 is None: x0 = np.ceil(10*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w)
-            res = minimize(lambda x : self.variance_GH(x,nohess=True,delta=0)[:-1], x0, jac=True, hess=lambda x : self.variance_GH(x,delta=0)[-1], bounds=constraint1, constraints=[constraint2,constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-8)
+            res = minimize(lambda x : self.variance_GH(x,nohess=True,delta=delta)[:-1], x0, jac=True, hess=lambda x : self.variance_GH(x,delta=delta)[-1], bounds=constraint1, constraints=[constraint2,constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-8)
 
         else:
             epsq = eps**2
-            constraint2 = NonlinearConstraint(lambda x : self.variance(x,delta=0), epsq, epsq, jac = lambda x : self.variance_GH(x,nohess=True,delta=0)[1], hess=lambda x,p : self.variance_GH(x,delta=0)[2]*p)
+            constraint2 = NonlinearConstraint(lambda x : self.variance(x,delta=delta), epsq, epsq, jac = lambda x : self.variance_GH(x,nohess=True,delta=delta)[1], hess=lambda x,p : self.variance_GH(x,delta=delta)[2]*p)
             if x0 is None: x0 = np.ceil(eps**-2*np.random.rand(L))
-            res = minimize(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=[constraint2,constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":10000, 'verbose':3}, tol = 1.0e-10)
+            res = minimize(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=[constraint2,constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-10)
+
+        return res.x
+
+    def ipopt_solve(self, budget=None, eps=None, x0=None):
+        from cyipopt import minimize_ipopt
+
+        if budget is None and eps is None:
+            raise ValueError("Need to specify either budget or RMSE tolerance")
+
+        delta = 0.0
+
+        L = self.L
+        w = self.costs
+        e = self.e
+
+        print("Optimizing using ipopt...")
+
+        options = {"maxiter":1000, 'print_level':5, 'print_user_options' : 'yes', 'bound_relax_factor' : 1.e-30, 'honor_original_bounds' : 'yes', 'dual_inf_tol' : 1.e-30}
+
+        constraint1 = [(0, np.inf) for i in range(L)]
+        constraint3 = {'type':'ineq', 'fun': lambda x : e@x-1, 'jac': lambda x : e, 'hess': lambda x,p : 0}
+        if budget is not None:
+            constraint2 = {'type':'ineq', 'fun': lambda x : budget - w@x, 'jac': lambda x : -w, 'hess': lambda x,p : 0}
+
+            if x0 is None: x0 = np.ceil(10*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w)
+            res = minimize_ipopt(lambda x : self.variance_GH(x,nohess=True,delta=delta)[:-1], x0, jac=True, hess=lambda x : self.variance_GH(x,delta=delta)[-1], bounds=constraint1, constraints=[constraint2,constraint3], options=options, tol = 1.0e-10)
+
+        else:
+            epsq = eps**2
+            #constraint2 = NonlinearConstraint(lambda x : self.variance(x,delta=delta), epsq, epsq, jac = lambda x : self.variance_GH(x,nohess=True,delta=delta)[1], hess=lambda x,p : self.variance_GH(x,delta=delta)[2]*p)
+            constraint2 = {'type':'ineq', 'fun': lambda x : epsq - self.variance(x,delta=delta), 'jac': lambda x : -self.variance_GH(x,nohess=True,delta=delta)[1], 'hess': lambda x,p : -self.variance_GH(x,delta=delta)[2]*p}
+            if x0 is None: x0 = np.ceil(eps**-2*np.random.rand(L))
+            res = minimize_ipopt(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hess=lambda x : np.zeros((len(x),len(x))), bounds=constraint1, constraints=[constraint2,constraint3], options=options, tol = 1.0e-10)
+
+        print(res.x.round())
 
         return res.x
 
@@ -324,19 +365,21 @@ if __name__ == '__main__':
 
     problem = SAP(C, KK, groups, costs)
 
-    scipy_sol,cvxpy_sol,gurobi_sol = None,None,None
-    if False:
+    scipy_sol,cvxpy_sol,gurobi_sol,ipopt_sol = None,None,None,None
+    if True:
+        ipopt_sol  = problem.solve(eps=eps, solver="ipopt")
         cvxpy_sol  = problem.solve(eps=eps, solver="cvxpy")
-        scipy_sol  = problem.solve(eps=eps, solver="scipy")
+        #scipy_sol  = problem.solve(eps=eps, solver="scipy")
         #gurobi_sol = problem.solve(eps=eps, solver="gurobi")
         print("MSE tolerance: ", eps**2)
     else:
+        ipopt_sol  = problem.solve(budget=budget, solver="ipopt")
         cvxpy_sol  = problem.solve(budget=budget, solver="cvxpy")
-        scipy_sol  = problem.solve(budget=budget, solver="scipy")
+        #scipy_sol  = problem.solve(budget=budget, solver="scipy")
         #gurobi_sol = problem.solve(budget=budget, solver="gurobi")
         print("Budget: ", budget)
 
-    sols = [gurobi_sol, cvxpy_sol, scipy_sol]
+    sols = [gurobi_sol, ipopt_sol, cvxpy_sol, scipy_sol]
     fvals = [(costs@sol, problem.variance(sol)) for sol in sols if sol is not None]
 
     print(fvals)
