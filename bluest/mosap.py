@@ -74,7 +74,7 @@ class MOSAP(object):
         No       = self.n_outputs
         mappings = self.mappings
 
-        out = [self.SAPS[n].variance_with_grad_and_hess(m[mappings[n]],nohess=nohess,delta=delta) for n in range(No)]
+        out = [self.SAPS[n].variance_GH(m[mappings[n]],nohess=nohess,delta=delta) for n in range(No)]
         variances = [item[0] for item in out]
         gradients = [item[1] for item in out]
         hessians  = [item[2] for item in out]
@@ -190,11 +190,13 @@ class MOSAP(object):
 
         return np.array(m.X)
 
-    def cvxpy_get_multi_constraints(self, m, t, eps=None):
+    def cvxpy_get_multi_constraints(self, m, t=None, eps=None):
         mappings = self.mappings
         No       = self.n_outputs
 
+        if eps is None and t is None: raise ValueError("Need to provide either t or eps")
         if eps is None: eps = np.ones((No,))
+        if t is None: t = 1
 
         scales = np.array([1/abs(self.SAPS[n].psi).sum(axis=0).mean() for n in range(No)])
 
@@ -205,7 +207,7 @@ class MOSAP(object):
             Nn = self.SAPS[n].N
             PHIs.append(cp.reshape((self.SAPS[n].psi*scales[n])@m[mappings[n]], (Nn,Nn)))
             e = np.zeros((Nn,1)); e[0] = np.sqrt(scales[n])/eps[n]
-            bmats.append(cp.bmat([[PHIs[-1], e], [e.T, cp.reshape(t[n],(1,1))]]))
+            bmats.append(cp.bmat([[PHIs[-1], e], [e.T, cp.reshape(t,(1,1))]]))
 
         out = [bmat >> 0 for bmat in bmats]
         return out
@@ -226,15 +228,14 @@ class MOSAP(object):
         scales = np.array([1/abs(self.SAPS[n].psi).sum(axis=0).mean() for n in range(No)])
 
         m = cp.Variable(L, nonneg=True)
-        t = cp.Variable(No, nonneg=True)
         if budget is not None:
-            tt = cp.Variable(nonneg=True)
-            obj = cp.Minimize(tt)
-            constraints = [w@m <= 1., t <= tt, *self.cvxpy_get_multi_constraints(m, t)]
+            t = cp.Variable(nonneg=True)
+            obj = cp.Minimize(t)
+            constraints = [w@m <= 1., *self.cvxpy_get_multi_constraints(m, t=t, eps=None)]
             constraints += [m[mappings[n]]@e[mappings[n]] >= 1./budget for n in range(self.n_outputs)]
         else:
             obj = cp.Minimize((w/np.linalg.norm(w))@m)
-            constraints = [t <= 1, *self.cvxpy_get_multi_constraints(m,t,eps)]
+            constraints = [*self.cvxpy_get_multi_constraints(m, t=None, eps=eps)]
             constraints += [m[mappings[n]]@e[mappings[n]] >= 1 for n in range(self.n_outputs)]
 
         prob = cp.Problem(obj, constraints)
@@ -294,7 +295,7 @@ class MOSAP(object):
 
         else:
             epsq = eps**2
-            constraint2 = [NonlinearConstraint(lambda x : self.SAPS[n].variance(x[mappings[n]],delta=0), epsq[n], epsq[n], jac = lambda x : self.SAPS[n].variance_with_grad_and_hess(x[mappings[n]],nohess=True,delta=0)[1], hess=lambda x,p : self.SAPS[n].variance_with_grad_and_hess(x[mappings[n]],delta=0)[2]*p) for n in range(No)]
+            constraint2 = [NonlinearConstraint(lambda x : self.SAPS[n].variance(x[mappings[n]],delta=0), epsq[n], epsq[n], jac = lambda x : self.SAPS[n].variance_GH(x[mappings[n]],nohess=True,delta=0)[1], hess=lambda x,p : self.SAPS[n].variance_GH(x[mappings[n]],delta=0)[2]*p) for n in range(No)]
             if x0 is None: x0 = np.ceil(np.linalg.norm(eps)**-2*np.random.rand(L))
             res = minimize(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=constraint2 + constraint3, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":10000, 'verbose':3}, tol = 1.0e-8)
 

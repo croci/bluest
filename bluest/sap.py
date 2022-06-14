@@ -236,7 +236,11 @@ class SAP(object):
 
         return np.array(m.X)
 
-    def cvxpy_fun(self, m, t, eps=1):
+    def cvxpy_fun(self, m, t=None, eps=None):
+        if t is None and eps is None: raise ValueError("eps and t cannot both be None")
+        if t is None: t = 1
+        if eps is None: eps = 1
+        
         N = self.N;
         scales = 1/abs(self.psi).sum(axis=0).mean()
         PHI = cp.reshape((self.psi*scales)@m, (N,N))
@@ -259,14 +263,14 @@ class SAP(object):
         scales = 1/abs(self.psi).sum(axis=0).mean()
 
         m = cp.Variable(L, nonneg=True)
-        t = cp.Variable(nonneg=True)
         if budget is not None:
+            t = cp.Variable(nonneg=True)
             obj = cp.Minimize(t)
 
-            constraints = [w@m <= 1, m@e >= 1/budget, self.cvxpy_fun(m,t) >> 0]
+            constraints = [w@m <= 1, m@e >= 1/budget, self.cvxpy_fun(m,t=t,eps=None) >> 0]
         else:
             obj = cp.Minimize((w/np.linalg.norm(w))@m)
-            constraints = [t <= 1, m@e >= 1, self.cvxpy_fun(m,t,eps) >> 0]
+            constraints = [m@e >= 1, self.cvxpy_fun(m,t=None,eps=eps) >> 0]
 
         prob = cp.Problem(obj, constraints)
 

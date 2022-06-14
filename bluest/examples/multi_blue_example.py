@@ -134,6 +134,7 @@ complexity_test = False
 standard_MC_test = False
 comparison_test = False
 variance_test = False
+solver_test = True
 
 if complexity_test:
     eps = 2**np.arange(3,8)
@@ -175,6 +176,24 @@ if comparison_test:
 if variance_test:
     budget = 1.; eps = None
     err_ex, err = problem.variance_test(budget=budget, eps=eps, K=3, N=100)
+    sys.exit(0)
+
+if solver_test:
+
+    K = 3; eps = 0.025; budget = 10.
+
+    out_cvxpy = problem.setup_solver(K=K, eps=eps, solver="cvxpy", optimization_solver_params={'feastol':1.e-7})
+    try: out_scipy = problem.setup_solver(K=K, eps=eps, solver="scipy")
+    except Exception: out_scipy = [None, {'errors':None, 'total_cost':None}]
+    costs = (out_cvxpy[1]['total_cost'], out_scipy[1]['total_cost'])
+
+    out_cvxpy = problem.setup_solver(K=K, budget=budget, solver="cvxpy", optimization_solver_params={'feastol':1.e-5})
+    try: out_scipy = problem.setup_solver(K=K, budget=budget, solver="scipy")
+    except Exception: out_scipy = [None, {'errors':None, 'total_cost':None}]
+    errs = (out_cvxpy[1]['errors'], out_scipy[1]['errors'])
+    
+    print(errs, costs)
+
     sys.exit(0)
 
 problem.setup_solver(K=3, budget=10, solver="cvxpy")
