@@ -317,7 +317,7 @@ class MOSAP(object):
 
         print("Optimizing using ipopt...")
 
-        options = {"maxiter":200, 'print_level':5, 'print_user_options' : 'yes', 'bound_relax_factor' : 1.e-30, 'honor_original_bounds' : 'yes'}#, 'dual_inf_tol' : 1.e-30}
+        options = {"maxiter":200, 'print_level':5, 'print_user_options' : 'yes', 'bound_relax_factor' : 1.e-30, 'honor_original_bounds' : 'yes', 'dual_inf_tol' : 1.0e-5}
 
         eee = np.zeros((L+1,)); eee[0] = 1
         es = []
