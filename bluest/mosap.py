@@ -109,7 +109,7 @@ class MOSAP(object):
             if not integer:
                 constraint = lambda m : m@self.costs <= 1.001*budget and all(m[self.mappings[n]]@self.e[self.mappings[n]] >= 1 for n in range(self.n_outputs))
                 objective  = lambda m : max(self.variances(m))
-                
+
                 samples,fval = best_closest_integer_solution_BLUE_multi(samples, [self.SAPS[n].psi for n in range(self.n_outputs)], self.costs, self.e, self.mappings, budget=budget)
                 if np.isinf(fval):
                     print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
@@ -255,7 +255,7 @@ class MOSAP(object):
 
         budget, eps = self.check_input(budget, eps)
 
-        delta = 0
+        delta = 1.0e-6
 
         L        = self.L
         No       = self.n_outputs
@@ -263,46 +263,39 @@ class MOSAP(object):
         e        = self.e
         mappings = self.mappings
 
-        #NOTE: leave this for now, but if you want the max can just do min t where t >= var[n] for all n
-        def variance(m,delta=0):
-            return sum(self.variances(m,delta=delta))
-
-        def variance_GH(m,nohess=False,delta=0):
-            out = self.variance_GH(m,nohess=nohess,delta=delta)
-            var = sum(out[0])
-            grad = np.zeros((L,))
-            for n in range(No):
-                grad[mappings[n]] += out[1][n]
-            if not nohess:
-                hess = np.zeros((L,L))
-                for n in range(No):
-                    hess[np.ix_(mappings[n],mappings[n])] += out[2][n]
-
-                return var,grad,hess
-            else:
-                return var,grad
+        def max_variance(m,delta=0):
+            return max(self.variances(m,delta=delta))
 
         print("Optimizing using scipy...")
 
+        eee = np.zeros((L+1,)); eee[0] = 1
         es = []
         for n in range(No):
             ee = np.zeros((L,))
             ee[mappings[n]] = e.copy()[mappings[n]]
             es.append(ee)
 
-        constraint1 = Bounds(0.0*np.ones((L,)), np.inf*np.ones((L,)), keep_feasible=True)
-        constraint3 = [LinearConstraint(ee, 1, np.inf, keep_feasible=True) for ee in es]
+        #NOTE: super annoying trick for doing lambda functions inside list comprehensions, argh!
         if budget is not None:
-            constraint2 = LinearConstraint(w, -np.inf, budget)
+            constraint1 = Bounds(0.0*np.ones((L+1,)), np.inf*np.ones((L+1,)), keep_feasible=True)
+            constraint3 = [LinearConstraint(np.concatenate([[0],ee]), 1, np.inf, keep_feasible=True) for ee in es]
+            constraint2 = LinearConstraint(np.concatenate([[0],w]), -np.inf, budget)
+            constraint4 = [NonlinearConstraint(lambda x,nn=n : x[0] - self.SAPS[nn].variance(x[1:][mappings[nn]],delta=delta), 0, np.inf, jac = lambda x,nn=n : np.concatenate([[1],-self.SAPS[nn].variance_GH(x[1:][mappings[nn]],nohess=True,delta=delta)[1]]), hess = lambda x,p,nn=n : np.block([[0, np.zeros((1,len(x)-1))],[np.zeros((len(x)-1,1)), -self.SAPS[nn].variance_GH(x[1:][mappings[nn]],delta=delta)[2]]])*p) for n in range(No)]
 
-            if x0 is None: x0 = np.ceil(budget*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w)
-            res = minimize(lambda x : variance_GH(x,nohess=True,delta=delta), x0, jac=True, hess=lambda x : variance_GH(x,delta=delta)[-1], bounds=constraint1, constraints=[constraint2]+constraint3, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-8)
+            if x0 is None: x0 = np.ceil(budget*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w); x0 = np.concatenate([[max_variance(x0,delta=delta)], x0])
+            res = minimize(lambda x : (x[0], eee), x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=[constraint2]+constraint3+constraint4, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-15)
 
         else:
+            constraint1 = Bounds(0.0*np.ones((L,)), np.inf*np.ones((L,)), keep_feasible=True)
+            constraint3 = [LinearConstraint(ee.copy(), 1, np.inf, keep_feasible=True) for ee in es]
             epsq = eps**2
-            constraint2 = [NonlinearConstraint(lambda x : self.SAPS[n].variance(x[mappings[n]],delta=delta), epsq[n], epsq[n], jac = lambda x : self.SAPS[n].variance_GH(x[mappings[n]],nohess=True,delta=delta)[1], hess=lambda x,p : self.SAPS[n].variance_GH(x[mappings[n]],delta=delta)[2]*p) for n in range(No)]
+            constraint2 = [NonlinearConstraint(lambda x,n=nn : self.SAPS[n].variance(x[mappings[n]],delta=delta), -np.inf, epsq[n], jac = lambda x,n=nn : self.SAPS[n].variance_GH(x[mappings[n]],nohess=True,delta=delta)[1], hess=lambda x,p,n=nn : self.SAPS[n].variance_GH(x[mappings[n]],delta=delta)[2]*p) for nn in range(No)]
             if x0 is None: x0 = np.ceil(np.linalg.norm(eps)**-2*np.random.rand(L))
-            res = minimize(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=constraint2 + constraint3, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-8)
+            res = minimize(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=constraint2 + constraint3, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":2500, 'verbose':3}, tol = 1.0e-15)
+
+        if budget is not None: res.x = res.x[1:]
+
+        print(res.x.round())
 
         return res.x
 
@@ -311,7 +304,7 @@ class MOSAP(object):
 
         budget, eps = self.check_input(budget, eps)
 
-        delta = 0.0
+        delta = 1.0e-6
 
         L        = self.L
         No       = self.n_outputs
@@ -319,48 +312,39 @@ class MOSAP(object):
         e        = self.e
         mappings = self.mappings
 
-        #NOTE: leave this for now, but if you want the max can just do min t where t >= var[n] for all n
-        def variance(m,delta=0):
-            return sum(self.variances(m,delta=delta))
-
-        def variance_GH(m,nohess=False,delta=0):
-            out = self.variance_GH(m,nohess=nohess,delta=delta)
-            var = sum(out[0])
-            grad = np.zeros((L,))
-            for n in range(No):
-                grad[mappings[n]] += out[1][n]
-            if not nohess:
-                hess = np.zeros((L,L))
-                for n in range(No):
-                    hess[np.ix_(mappings[n],mappings[n])] += out[2][n]
-
-                return var,grad,hess
-            else:
-                return var,grad
+        def max_variance(m,delta=0):
+            return max(self.variances(m,delta=delta))
 
         print("Optimizing using ipopt...")
 
-        options = {"maxiter":1000, 'print_level':5, 'print_user_options' : 'yes', 'bound_relax_factor' : 1.e-30, 'honor_original_bounds' : 'yes', 'dual_inf_tol' : 1.e-30}
+        options = {"maxiter":1000, 'print_level':5, 'print_user_options' : 'yes', 'bound_relax_factor' : 1.e-30, 'honor_original_bounds' : 'yes'}#, 'dual_inf_tol' : 1.e-30}
 
+        eee = np.zeros((L+1,)); eee[0] = 1
         es = []
         for n in range(No):
             ee = np.zeros((L,))
             ee[mappings[n]] = e.copy()[mappings[n]]
             es.append(ee)
 
-        constraint1 = [(0, np.inf) for i in range(L)]
-        constraint3 = [{'type':'ineq', 'fun': lambda x : ee@x-1, 'jac': lambda x : ee, 'hess': lambda x,p : 0} for ee in es]
+        #NOTE: super annoying trick for doing lambda functions inside list comprehensions, argh!
         if budget is not None:
-            constraint2 = {'type':'ineq', 'fun': lambda x : budget - w@x, 'jac': lambda x : -w, 'hess': lambda x,p : 0}
+            constraint1 = [(0, np.inf) for i in range(L+1)]
+            constraint3 = [{'type':'ineq', 'fun': lambda x,ee=ees : ee@x[1:]-1, 'jac': lambda x,ee=ees : np.concatenate([np.zeros((1,)),ee]), 'hess': lambda x,p : 0} for ees in es]
+            constraint2 = [{'type':'ineq', 'fun': lambda x : budget - w@x[1:], 'jac': lambda x : np.concatenate([np.zeros((1,)),-w]), 'hess': lambda x,p : 0}]
+            constraint4 = [{'type':'ineq', 'fun': lambda x,nn=n : x[0] - self.SAPS[nn].variance(x[1:][mappings[nn]],delta=delta), 'jac' : lambda x,nn=n : np.concatenate([[1],-self.SAPS[nn].variance_GH(x[1:][mappings[nn]],nohess=True,delta=delta)[1]]), 'hess': lambda x,p,nn=n : np.block([[0, np.zeros((1,len(x)-1))],[np.zeros((len(x)-1,1)), -self.SAPS[nn].variance_GH(x[1:][mappings[nn]],delta=delta)[2]]])*p} for n in range(No)]
 
-            if x0 is None: x0 = np.ceil(budget*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w)
-            res = minimize_ipopt(lambda x : variance_GH(x,nohess=True,delta=delta), x0, jac=True, hess=lambda x : variance_GH(x,delta=delta)[-1], bounds=constraint1, constraints=[constraint2]+constraint3, options=options, tol = 1.0e-10)
+            if x0 is None: x0 = np.ceil(budget*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w); x0 = np.concatenate([[max_variance(x0,delta=delta)], x0])
+            res = minimize_ipopt(lambda x : (x[0], eee), x0, jac=True, hess=lambda x : 0, bounds=constraint1, constraints=constraint2+constraint3+constraint4, options=options, tol = 1.0e-15)
 
         else:
             epsq = eps**2
-            constraint2 = [{'type':'ineq', 'fun': lambda x : epsq[n] - self.SAPS[n].variance(x[mappings[n]],delta=delta), 'jac': lambda x : -self.SAPS[n].variance_GH(x[mappings[n]],nohess=True,delta=delta)[1], 'hess': lambda x,p : -self.SAPS[n].variance_GH(x[mappings[n]],delta=delta)[2]*p} for n in range(No)]
+            constraint1 = [(0, np.inf) for i in range(L)]
+            constraint3 = [{'type':'ineq', 'fun': lambda x,ee=ees : ee@x-1, 'jac': lambda x,ee=ees : ee, 'hess': lambda x,p : 0} for ees in es]
+            constraint2 = [{'type':'ineq', 'fun': lambda x,n=nn : epsq[n] - self.SAPS[n].variance(x[mappings[n]],delta=delta), 'jac': lambda x,n=nn : -self.SAPS[n].variance_GH(x[mappings[n]],nohess=True,delta=delta)[1], 'hess': lambda x,p,n=nn : -self.SAPS[n].variance_GH(x[mappings[n]],delta=delta)[2]*p} for nn in range(No)]
             if x0 is None: x0 = np.ceil(np.linalg.norm(eps)**-2*np.random.rand(L))
-            res = minimize_ipopt(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hess=lambda x : np.zeros((len(x),len(x))), bounds=constraint1, constraints=constraint2 + constraint3, options=options, tol = 1.0e-10)
+            res = minimize_ipopt(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hess=lambda x : 0, bounds=constraint1, constraints=constraint2 + constraint3, options=options, tol = 1.0e-15)
+
+        if budget is not None: res.x = res.x[1:]
 
         print(res.x.round())
 

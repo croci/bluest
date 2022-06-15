@@ -319,7 +319,7 @@ class SAP(object):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
 
-        delta = 0.0
+        delta = 1.0e-6
 
         L = self.L
         w = self.costs
