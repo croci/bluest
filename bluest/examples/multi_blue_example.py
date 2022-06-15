@@ -181,7 +181,7 @@ if variance_test:
 if solver_test:
 
     from gurobipy import GurobiError
-    K = 5; eps = 0.025; budget = 10.
+    K = 3; eps = 0.025; budget = 10.
 
     try: out_ipopt = problem.setup_solver(K=K, budget=budget, solver="ipopt")
     except GurobiError: out_ipopt = [None, {'errors':None, 'total_cost':None}]

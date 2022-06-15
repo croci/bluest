@@ -153,7 +153,7 @@ def best_closest_integer_solution_BLUE_multi(sol, psis, w, e, mappings, budget=N
         print('WARNING! Too many dimensions to brute-force it. Randomising search. Note: result might not be optimal.')
         best_val = None; best_fval = np.inf
         trial = 0
-        while best_val is None and trial < 1000:
+        while best_val is None and trial < 500:
             trial += 1
             print("Randomisation n %d." % trial)
 
@@ -178,7 +178,8 @@ def best_closest_integer_solution_BLUE_multi(sol, psis, w, e, mappings, budget=N
             best_val, best_fval = best_closest_integer_solution_BLUE_multi_helper(r_sol, psis, w, e, mappings, budget, eps, lb, ub, idx)
 
         if trial >= 100 and best_val is None:
-            raise RuntimeError("Unable to find feasible integer solution.")
+            print("Unable to find feasible integer solution.")
+            return None,np.inf
 
         print("Success!")
 

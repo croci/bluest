@@ -317,7 +317,7 @@ class MOSAP(object):
 
         print("Optimizing using ipopt...")
 
-        options = {"maxiter":1000, 'print_level':5, 'print_user_options' : 'yes', 'bound_relax_factor' : 1.e-30, 'honor_original_bounds' : 'yes'}#, 'dual_inf_tol' : 1.e-30}
+        options = {"maxiter":200, 'print_level':5, 'print_user_options' : 'yes', 'bound_relax_factor' : 1.e-30, 'honor_original_bounds' : 'yes'}#, 'dual_inf_tol' : 1.e-30}
 
         eee = np.zeros((L+1,)); eee[0] = 1
         es = []
@@ -334,7 +334,7 @@ class MOSAP(object):
             constraint4 = [{'type':'ineq', 'fun': lambda x,nn=n : x[0] - self.SAPS[nn].variance(x[1:][mappings[nn]],delta=delta), 'jac' : lambda x,nn=n : np.concatenate([[1],-self.SAPS[nn].variance_GH(x[1:][mappings[nn]],nohess=True,delta=delta)[1]]), 'hess': lambda x,p,nn=n : np.block([[0, np.zeros((1,len(x)-1))],[np.zeros((len(x)-1,1)), -self.SAPS[nn].variance_GH(x[1:][mappings[nn]],delta=delta)[2]]])*p} for n in range(No)]
 
             if x0 is None: x0 = np.ceil(budget*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w); x0 = np.concatenate([[max_variance(x0,delta=delta)], x0])
-            res = minimize_ipopt(lambda x : (x[0], eee), x0, jac=True, hess=lambda x : 0, bounds=constraint1, constraints=constraint2+constraint3+constraint4, options=options, tol = 1.0e-15)
+            res = minimize_ipopt(lambda x : (x[0], eee), x0, jac=True, hess=lambda x : 0, bounds=constraint1, constraints=constraint2+constraint3+constraint4, options=options, tol = 1.0e-12)
 
         else:
             epsq = eps**2
@@ -342,7 +342,7 @@ class MOSAP(object):
             constraint3 = [{'type':'ineq', 'fun': lambda x,ee=ees : ee@x-1, 'jac': lambda x,ee=ees : ee, 'hess': lambda x,p : 0} for ees in es]
             constraint2 = [{'type':'ineq', 'fun': lambda x,n=nn : epsq[n] - self.SAPS[n].variance(x[mappings[n]],delta=delta), 'jac': lambda x,n=nn : -self.SAPS[n].variance_GH(x[mappings[n]],nohess=True,delta=delta)[1], 'hess': lambda x,p,n=nn : -self.SAPS[n].variance_GH(x[mappings[n]],delta=delta)[2]*p} for nn in range(No)]
             if x0 is None: x0 = np.ceil(np.linalg.norm(eps)**-2*np.random.rand(L))
-            res = minimize_ipopt(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hess=lambda x : 0, bounds=constraint1, constraints=constraint2 + constraint3, options=options, tol = 1.0e-15)
+            res = minimize_ipopt(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hess=lambda x : 0, bounds=constraint1, constraints=constraint2 + constraint3, options=options, tol = 1.0e-12)
 
         if budget is not None: res.x = res.x[1:]
 

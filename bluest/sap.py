@@ -20,7 +20,7 @@ mosek_params = {
 
 cvxpy_default_params = {
         "abstol" : 1.e-8,
-        "reltol" : 1.e-5,
+        "reltol" : 1.e-4,
         "max_iters" : 1000,
         "feastol" : 1.0e-6,
         "kttsolver" : 'chol',
@@ -327,7 +327,7 @@ class SAP(object):
 
         print("Optimizing using ipopt...")
 
-        options = {"maxiter":1000, 'print_level':5, 'print_user_options' : 'yes', 'bound_relax_factor' : 1.e-30, 'honor_original_bounds' : 'yes', 'dual_inf_tol' : 1.e-30}
+        options = {"maxiter":200, 'print_level':5, 'print_user_options' : 'yes', 'bound_relax_factor' : 1.e-30, 'honor_original_bounds' : 'yes'}#, 'dual_inf_tol' : 1.e-30}
 
         constraint1 = [(0, np.inf) for i in range(L)]
         constraint3 = {'type':'ineq', 'fun': lambda x : e@x-1, 'jac': lambda x : e, 'hess': lambda x,p : 0}

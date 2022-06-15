@@ -110,6 +110,32 @@ if __name__ == "__main__":
 
     eps = 0.01*abs(mus); budget=None
 
+    solver_test = True
+    if solver_test:
+
+        from gurobipy import GurobiError
+        K = 3
+
+        #try: out_ipopt = problem.setup_solver(K=K, budget=budget, solver="ipopt")
+        #except GurobiError: out_ipopt = [None, {'errors':None, 'total_cost':None}]
+        #out_cvxpy = problem.setup_solver(K=K, budget=budget, solver="cvxpy", optimization_solver_params={'feastol':1.e-5})
+        #try: out_scipy = problem.setup_solver(K=K, budget=budget, solver="scipy")
+        #except GurobiError: out_scipy = [None, {'errors':None, 'total_cost':None}]
+        #errs = (out_cvxpy[1]['errors'], out_ipopt[1]['errors'], out_scipy[1]['errors'])
+        
+        out_cvxpy = problem.setup_solver(K=K, eps=eps, solver="cvxpy", optimization_solver_params={'feastol':1.e-7})
+        try: out_ipopt = problem.setup_solver(K=K, eps=eps, solver="ipopt")
+        except GurobiError: out_ipopt = [None, {'errors':None, 'total_cost':None}]
+        #try: out_scipy = problem.setup_solver(K=K, eps=eps, solver="scipy")
+        #except GurobiError: out_scipy = [None, {'errors':None, 'total_cost':None}]
+        #costs = (out_cvxpy[1]['total_cost'], out_ipopt[1]['total_cost'], out_scipy[1]['total_cost'])
+        costs = (out_cvxpy[1]['total_cost'], out_ipopt[1]['total_cost'])
+        
+        #print(errs, costs)
+        print(costs)
+
+        sys.exit(0)
+
     out_BLUE = problem.setup_solver(K=3, budget=budget, eps=eps)
     out_MLMC = problem.setup_mlmc(budget=budget, eps=eps)
     out_MFMC = problem.setup_mfmc(budget=budget, eps=eps)
