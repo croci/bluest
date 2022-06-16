@@ -578,19 +578,21 @@ class BLUEProblem(object):
         M = self.M
 
         more_expensive_models = self.check_costs(warning=True)
+        lme = len(more_expensive_models)
 
         w = self.get_costs()
         idx = np.argsort(w)[::-1]
-        assert idx[len(more_expensive_models)] == 0
+        idx = idx[lme:]
+        assert idx[0] == 0
 
         if self.verbose: print("Setting up optimal MLMC estimator...\n") 
 
         # get all groups that incude model 0 and are feasible for MLMC with models ordered by cost
         GG = nx.intersection_all(self.G)
         groups = [[0]]
-        for i in range(M-1):
-            for remove in combinations(range(1,M),i):
-                keep = np.array([i for i in range(M) if i not in remove and i >= len(more_expensive_models)])
+        for i in range(M-1-lme):
+            for remove in combinations(range(1,M-lme),i):
+                keep = np.array([i for i in range(M-lme) if i not in remove], dtype=np.int)
                 group = list(idx[keep])
                 if all([GG.has_edge(i,j) for i,j in zip(group[:-1],group[1:])]):
                     groups.append(group)
