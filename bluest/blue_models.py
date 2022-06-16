@@ -140,7 +140,8 @@ class BLUEProblem(object):
             more_expensive_models = [self.G[0].nodes[i]["model_number"] for i in np.argwhere(costs > costs[0]).flatten()]
             message_error = "Model zero is not the most expensive model. Consider removing the more expensive models %s" % more_expensive_models
             message_warning = "WARNING! Model zero is not the most expensive model. The more expensive models are: %s" % more_expensive_models
-            if warning and self.warning: print(message_warning)
+            if warning:
+                if self.warning: print(message_warning)
             else: raise ValueError(message_error)
         return more_expensive_models
 
