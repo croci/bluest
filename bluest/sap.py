@@ -19,7 +19,7 @@ mosek_params = {
 }
 
 cvxpy_default_params = {
-        "abstol" : 1.e-8,
+        "abstol" : 1.e-7,
         "reltol" : 1.e-4,
         "max_iters" : 1000,
         "feastol" : 1.0e-6,

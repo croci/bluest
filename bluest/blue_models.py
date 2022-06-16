@@ -133,14 +133,16 @@ class BLUEProblem(object):
         costs = np.array([sum(model_costs[group]) for groupsk in groups for group in groupsk])
         return costs
 
-    def check_costs(self, warning=False):
+    def check_costs(self, warning=True):
+        more_expensive_models = []
         costs = self.get_costs()
         if costs[0] != costs.max():
             more_expensive_models = [self.G[0].nodes[i]["model_number"] for i in np.argwhere(costs > costs[0]).flatten()]
             message_error = "Model zero is not the most expensive model. Consider removing the more expensive models %s" % more_expensive_models
-            message_warning = "WARNING! Model zero is not the most expensive model and some estimators won't run in this setting. The more expensive models are: %s" % more_expensive_models
+            message_warning = "WARNING! Model zero is not the most expensive model. The more expensive models are: %s" % more_expensive_models
             if warning and self.warning: print(message_warning)
             else: raise ValueError(message_error)
+        return more_expensive_models
 
     def get_mlmc_variances(self):
         return self.dV
@@ -574,11 +576,11 @@ class BLUEProblem(object):
 
         M = self.M
 
-        self.check_costs()
+        more_expensive_models = self.check_costs(warning=True)
 
         w = self.get_costs()
         idx = np.argsort(w)[::-1]
-        assert idx[0] == 0
+        assert idx[len(more_expensive_models)] == 0
 
         if self.verbose: print("Setting up optimal MLMC estimator...\n") 
 
@@ -587,7 +589,7 @@ class BLUEProblem(object):
         groups = [[0]]
         for i in range(M-1):
             for remove in combinations(range(1,M),i):
-                keep = np.array([i for i in range(M) if i not in remove])
+                keep = np.array([i for i in range(M) if i not in remove and i >= len(more_expensive_models)])
                 group = list(idx[keep])
                 if all([GG.has_edge(i,j) for i,j in zip(group[:-1],group[1:])]):
                     groups.append(group)
