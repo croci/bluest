@@ -27,6 +27,15 @@ cvxpy_default_params = {
         "refinement" : 2,
 }
 
+cvxopt_default_params = {
+        "abstol" : 1.e-7,
+        "reltol" : 1.e-4,
+        "maxiters" : 1000,
+        "feastol" : 1.0e-6,
+        "kttsolver" : 'chol',
+        "refinement" : 2,
+}
+
 ########################################################
 
 class SAP(object):
@@ -112,7 +121,7 @@ class SAP(object):
     def solve(self, budget=None, eps=None, solver="cvxpy", integer=False, x0=None, solver_params=None):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
-        if solver not in ["gurobi", "scipy", "cvxpy", "ipopt"]:
+        if solver not in ["gurobi", "scipy", "cvxpy", "ipopt", "cvxopt"]:
             raise ValueError("Optimization solvers available: 'gurobi', 'scipy', 'ipopt' or 'cvxpy'")
         if integer: solver="gurobi"
 
@@ -120,6 +129,7 @@ class SAP(object):
             print("Minimizing statistical error for fixed cost...\n")
             if   solver == "gurobi": samples = self.gurobi_solve(budget=budget, integer=integer)
             elif solver == "cvxpy":  samples = self.cvxpy_solve(budget=budget, cvxpy_params=solver_params)
+            elif solver == "cvxopt": samples = self.cvxopt_solve(budget=budget, cvxopt_params=solver_params)
             elif solver == "scipy":  samples = self.scipy_solve(budget=budget, x0=x0)
             elif solver == "ipopt":  samples = self.ipopt_solve(budget=budget, x0=x0)
 
@@ -136,6 +146,7 @@ class SAP(object):
             elif solver == "scipy":  samples = self.scipy_solve(eps=eps, x0=x0)
             elif solver == "ipopt":  samples = self.ipopt_solve(eps=eps, x0=x0)
             elif solver == "cvxpy":  samples = self.cvxpy_solve(eps=eps, cvxpy_params=solver_params)
+            elif solver == "cvxopt": samples = self.cvxopt_solve(eps=eps, cvxopt_params=solver_params)
 
             if not integer:
 
@@ -237,6 +248,61 @@ class SAP(object):
 
         return np.array(m.X)
 
+    def cvxopt_solve(self, budget=None, eps=None, delta=0.0, cvxopt_params=None):
+        from scipy.sparse import csr_matrix, bmat, find
+        from cvxopt import matrix,spmatrix,solvers
+
+        def csr_to_cvxopt(A):
+            l = find(A)
+            out = spmatrix(l[-1],l[0],l[1], A.shape)
+            return out
+
+        if budget is None and eps is None:
+            raise ValueError("Need to specify either budget or RMSE tolerance")
+
+        N        = self.N
+        L        = self.L
+        w        = self.costs.copy()
+        e        = self.e
+        psi      = csr_matrix(self.psi); psi.eliminate_zeros()
+
+        cvxopt_solver_params = cvxopt_default_params.copy()
+        if cvxopt_params is not None:
+            cvxopt_solver_params.update(cvxopt_params)
+
+        scales = 1/abs(psi).sum(axis=0).mean()
+
+        if budget is not None:
+
+            c = np.zeros((L+1,)); c[0] = 1.; c = matrix(c)
+            wt = np.concatenate([[0], w])
+            et = np.concatenate([[0], e])
+            psit = bmat([[None, psi],[csr_matrix(([1.], ([2*N],[0])), shape=(2*N+1,1)), None]], format='csr')
+            G0 = csr_matrix(np.vstack([-np.eye(L+1),wt,-et])); G0.eliminate_zeros(); G0 = csr_to_cvxopt(G0)
+            h0 = np.concatenate([np.zeros((L+1,)), [budget], [-1.]]); h0 = matrix(h0)
+            G1 = csr_to_cvxopt(-psit)
+            h1 = np.zeros((N+1,N+1)); h1[-1,0] = 1.; h1[0,-1] = 1.; h1 = matrix(h1)
+        else:
+            c = matrix(w/np.linalg.norm(w))
+            G0 = csr_matrix(np.vstack([-np.eye(L),-e])); G0.eliminate_zeros(); G0 = csr_to_cvxopt(G0)
+            h0 = np.concatenate([np.zeros((L,)), [-1.]]); h0 = matrix(h0)
+            G1 = csr_to_cvxopt(-bmat([[psi],[csr_matrix((2*N+1,L))]], format='csr'))
+            h1 = np.zeros((N+1,N+1)); h1[-1,0] = 1.; h1[0,-1] = 1.; h1[-1,-1] = eps**2; h1 = matrix(h1)
+
+        res = solvers.sdp(c,Gl=G0,hl=h0,Gs=[G1],hs=[h1],solver=None, options=cvxopt_solver_params)
+        
+        print(res)
+
+        if budget is not None:
+            m = np.maximum(np.array(res["x"]).flatten()[1:],0)
+        else:
+            m = np.maximum(np.array(res["x"]).flatten(),0)
+
+        print(m.round())
+
+
+        return m
+
     def cvxpy_fun(self, m, t=None, eps=None):
         if t is None and eps is None: raise ValueError("eps and t cannot both be None")
         if t is None: t = 1
@@ -280,6 +346,8 @@ class SAP(object):
         prob.solve(verbose=True, solver="CVXOPT", **cvxpy_solver_params)
 
         if eps is None: m.value *= budget
+
+        print(m.value.round())
 
         return m.value
 
@@ -365,21 +433,23 @@ if __name__ == '__main__':
 
     problem = SAP(C, KK, groups, costs)
 
-    scipy_sol,cvxpy_sol,gurobi_sol,ipopt_sol = None,None,None,None
+    scipy_sol,cvxpy_sol,gurobi_sol,ipopt_sol,cvxopt_sol = None,None,None,None,None
     if True:
-        ipopt_sol  = problem.solve(eps=eps, solver="ipopt")
+        cvxopt_sol = problem.solve(eps=eps, solver="cvxopt")
         cvxpy_sol  = problem.solve(eps=eps, solver="cvxpy")
+        #ipopt_sol  = problem.solve(eps=eps, solver="ipopt")
         #scipy_sol  = problem.solve(eps=eps, solver="scipy")
         #gurobi_sol = problem.solve(eps=eps, solver="gurobi")
         print("MSE tolerance: ", eps**2)
     else:
-        ipopt_sol  = problem.solve(budget=budget, solver="ipopt")
+        cvxopt_sol = problem.solve(budget=budget, solver="cvxopt")
         cvxpy_sol  = problem.solve(budget=budget, solver="cvxpy")
+        #ipopt_sol  = problem.solve(budget=budget, solver="ipopt")
         #scipy_sol  = problem.solve(budget=budget, solver="scipy")
         #gurobi_sol = problem.solve(budget=budget, solver="gurobi")
         print("Budget: ", budget)
 
-    sols = [gurobi_sol, ipopt_sol, cvxpy_sol, scipy_sol]
+    sols = [gurobi_sol, ipopt_sol, cvxpy_sol, scipy_sol, cvxopt_sol]
     fvals = [(costs@sol, problem.variance(sol)) for sol in sols if sol is not None]
 
     print(fvals)
