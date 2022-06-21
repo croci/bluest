@@ -32,8 +32,7 @@ cvxopt_default_params = {
         "reltol" : 1.e-4,
         "maxiters" : 1000,
         "feastol" : 1.0e-6,
-        "kttsolver" : 'chol',
-        "refinement" : 2,
+        "refinement" : 1,
 }
 
 ########################################################
@@ -273,21 +272,27 @@ class SAP(object):
         scales = 1/abs(psi).sum(axis=0).mean()
 
         if budget is not None:
-
-            c = np.zeros((L+1,)); c[0] = 1.; c = matrix(c)
             wt = np.concatenate([[0], w])
             et = np.concatenate([[0], e])
-            psit = bmat([[None, psi],[csr_matrix(([1.], ([2*N],[0])), shape=(2*N+1,1)), None]], format='csr')
+
+            c = np.zeros((L+1,)); c[0] = 1.; c = matrix(c)
+
             G0 = csr_matrix(np.vstack([-np.eye(L+1),wt,-et])); G0.eliminate_zeros(); G0 = csr_to_cvxopt(G0)
-            h0 = np.concatenate([np.zeros((L+1,)), [budget], [-1.]]); h0 = matrix(h0)
-            G1 = csr_to_cvxopt(-psit)
-            h1 = np.zeros((N+1,N+1)); h1[-1,0] = 1.; h1[0,-1] = 1.; h1 = matrix(h1)
+            h0 = np.concatenate([np.zeros((L+1,)), [1.], [-1./budget]]); h0 = matrix(h0)
+
+            # NOTE: need to add a zero row every N entries since the last column of Phi is zero. Also here need to add a column to the left corresponding to the variable t
+            l = list(find(psi)); l[0] += l[0]//N; l[1] += 1; l[-1] = -np.concatenate([scales*l[-1], [1]]); l[0] = np.concatenate([l[0],[(N+1)**2-1]]); l[1] = np.concatenate([l[1],[0]])
+            G1 = csr_matrix((l[-1],(l[0],l[1])), shape=((N+1)**2,L+1)); G1 = csr_to_cvxopt(G1)
+            h1 = np.zeros((N+1,N+1)); h1[-1,0] = np.sqrt(scales); h1[0,-1] = np.sqrt(scales); h1 = matrix(h1)
         else:
             c = matrix(w/np.linalg.norm(w))
+
             G0 = csr_matrix(np.vstack([-np.eye(L),-e])); G0.eliminate_zeros(); G0 = csr_to_cvxopt(G0)
             h0 = np.concatenate([np.zeros((L,)), [-1.]]); h0 = matrix(h0)
-            G1 = csr_to_cvxopt(-bmat([[psi],[csr_matrix((2*N+1,L))]], format='csr'))
-            h1 = np.zeros((N+1,N+1)); h1[-1,0] = 1.; h1[0,-1] = 1.; h1[-1,-1] = eps**2; h1 = matrix(h1)
+
+            l = list(find(psi)); l[0] += l[0]//N; # NOTE: need to add a zero row every N entries since the last column of Phi is zero
+            G1 = (-scales)*csr_matrix((l[-1],(l[0],l[1])), shape=((N+1)**2,L)); G1 = csr_to_cvxopt(G1)
+            h1 = np.zeros((N+1,N+1)); h1[-1,0] = np.sqrt(scales)/eps; h1[0,-1] = np.sqrt(scales)/eps; h1[-1,-1] = 1; h1 = matrix(h1)
 
         res = solvers.sdp(c,Gl=G0,hl=h0,Gs=[G1],hs=[h1],solver=None, options=cvxopt_solver_params)
         
@@ -295,6 +300,7 @@ class SAP(object):
 
         if budget is not None:
             m = np.maximum(np.array(res["x"]).flatten()[1:],0)
+            m *= budget
         else:
             m = np.maximum(np.array(res["x"]).flatten(),0)
 
@@ -302,6 +308,24 @@ class SAP(object):
 
 
         return m
+
+    def cvxpy_to_cvxopt(self,probdata):
+        from scipy.sparse import csr_matrix, bmat, find
+        from cvxopt import matrix,spmatrix,solvers
+
+        def csr_to_cvxopt(A):
+            l = find(A)
+            out = spmatrix(l[-1],l[0],l[1], A.shape)
+            return out
+
+        c = matrix(probdata['c'])
+        G = csr_to_cvxopt(probdata['G'])
+        h = matrix(probdata['h'])
+        dims_tup = vars(probdata['dims'])
+        dims = {'l' : dims_tup['nonneg'], 'q': [], 's': dims_tup['psd']}
+
+        res = solvers.conelp(c, G, h, dims, options=cvxopt_default_params)
+        return res
 
     def cvxpy_fun(self, m, t=None, eps=None):
         if t is None and eps is None: raise ValueError("eps and t cannot both be None")
@@ -341,6 +365,9 @@ class SAP(object):
             constraints = [m@e >= 1, self.cvxpy_fun(m,t=None,eps=eps) >> 0]
 
         prob = cp.Problem(obj, constraints)
+
+        #probdata, _, _ = prob.get_problem_data(cp.CVXOPT)
+        #breakpoint()
 
         #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
         prob.solve(verbose=True, solver="CVXOPT", **cvxpy_solver_params)
@@ -434,16 +461,16 @@ if __name__ == '__main__':
     problem = SAP(C, KK, groups, costs)
 
     scipy_sol,cvxpy_sol,gurobi_sol,ipopt_sol,cvxopt_sol = None,None,None,None,None
-    if True:
-        cvxopt_sol = problem.solve(eps=eps, solver="cvxopt")
+    if False:
         cvxpy_sol  = problem.solve(eps=eps, solver="cvxpy")
+        cvxopt_sol = problem.solve(eps=eps, solver="cvxopt")
         #ipopt_sol  = problem.solve(eps=eps, solver="ipopt")
         #scipy_sol  = problem.solve(eps=eps, solver="scipy")
         #gurobi_sol = problem.solve(eps=eps, solver="gurobi")
         print("MSE tolerance: ", eps**2)
     else:
-        cvxopt_sol = problem.solve(budget=budget, solver="cvxopt")
         cvxpy_sol  = problem.solve(budget=budget, solver="cvxpy")
+        cvxopt_sol = problem.solve(budget=budget, solver="cvxopt")
         #ipopt_sol  = problem.solve(budget=budget, solver="ipopt")
         #scipy_sol  = problem.solve(budget=budget, solver="scipy")
         #gurobi_sol = problem.solve(budget=budget, solver="gurobi")
