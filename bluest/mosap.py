@@ -80,6 +80,17 @@ class MOSAP(object):
 
         return variances,gradients,hessians
 
+    def get_cleanup_matrices(self, m, delta=0):
+        No       = self.n_outputs
+        mappings = self.mappings
+        Xs = []
+        for n in range(No):
+            X = np.zeros((self.N, self.L))
+            X[:,mappings[n]] = self.SAPS[n].get_cleanup_matrix(m[mappings[n]],delta=delta)
+            Xs.append(X)
+
+        return np.vstack(Xs)
+
     def compute_BLUE_estimators(self, sums, samples):
         out = []
         for n in range(self.n_outputs):
@@ -91,6 +102,92 @@ class MOSAP(object):
         mus  = [item[0] for item in out]
         Vars = np.array([item[1] for item in out])
         return mus,Vars
+
+    def cleanup_solution(self, m, delta=0, tol=0):
+        # Attempts to find a solution that is sparser without changing the variance or the total cost
+
+        from scipy.linalg import null_space
+        # E is the matrix of the es constructed from self.e and the mappings in mosap.py
+        N = self.N
+        L = self.L
+        w = self.costs
+        No = self.n_outputs
+        mappings = self.mappings
+
+        E = []
+        for n in range(No):
+            ee = np.zeros((L,))
+            ee[mappings[n]] = self.e.copy()[mappings[n]]
+            E.append(ee)
+        E = np.vstack(E)
+
+
+        idx = np.argwhere(m > tol).flatten()
+        m0 = m.copy(); mlast = m.copy(); V0 = max(self.variances(m, delta=delta))
+        it = 0; nullsize = -1; V = V0*1
+        print("\nSolution cleanup started!")
+        print("It %3d: Solution cleanup, L = %d, N = %d, nnz = %d, nullspace size = n/a, variance = %e." % (it, L, N, len(idx), V)) 
+        while len(idx) > N:
+            idx = np.argwhere(m > tol).flatten()
+            m[m < tol] = 0
+            wr = w[idx]
+            Er = E[:,idx]
+
+            if it > 0 and L >= 1000: print("It %3d: Solution cleanup, L = %d, N = %d, nnz = %d, nullspace size = %3d, variance = %e." % (it, L, N, len(idx), nullsize, V)) 
+
+            it += 1
+
+            X = self.get_cleanup_matrices(m, delta=delta)
+
+            X = X[:,idx]
+            NN = null_space(X)
+            vals = wr@NN
+            signs = np.sign(vals)
+            NN[:, signs > 0] *= -1
+            vals[signs > 0] *= -1
+            NN   = NN[:, abs(signs) > 0]
+            vals = vals[abs(signs) > 0]
+            indexes = np.argsort(abs(vals))[::-1]
+            nullsize = len(vals)
+            if nullsize == 0: break
+            em = Er@m[idx]
+
+            for j in range(nullsize):
+                i = indexes[j]
+                t = NN[:,i]
+                evals = Er@t
+                negidx = np.argwhere(evals < 0).flatten()
+                if len(negidx) == 0: smax1 = np.inf
+                else:                smax1 = min(abs(em[negidx]-1)/abs(evals[negidx]))
+                negidx = np.argwhere(t < 0).flatten()
+                if len(negidx) == 0: smax2 = np.inf
+                else:                smax2 = min(m[idx][negidx]/abs(t[negidx]))
+                smax = max(min(smax1,smax2),0)
+                if smax > 5*tol:
+                    tt = np.zeros_like(m); tt[idx] = t
+                    mnew = m + smax*tt
+                    V = max(self.variances(mnew,delta=delta))
+                    if V < V0 or abs(V-V0)/abs(V0) < 1.0e-4:
+                        m = mnew.copy()
+                        break;
+                    else:
+                        smax = 0
+                        continue
+
+            if smax <= 5*tol:
+                break
+            else:
+                V = max(self.variances(m,delta=delta))
+                mlast = m.copy()
+
+        idx = np.argwhere(m > tol).flatten()
+        m[m < tol] = 0
+        V = max(self.variances(m,delta=delta))
+        print("It %3d: Solution cleanup, L = %d, N = %d, nnz = %d, nullspace size = %3d, variance = %e." % (it, L, N, len(idx), nullsize, V)) 
+        print("Solution cleanup completed.\n") 
+
+        return m
+
 
     def solve(self, budget=None, eps=None, solver="cvxpy", integer=False, x0=None, solver_params=None):
         if budget is None and eps is None:
@@ -107,10 +204,17 @@ class MOSAP(object):
             elif solver == "scipy":  samples = self.scipy_solve(budget=budget, x0=x0)
 
             if not integer:
+                old_samples = samples.copy()
+
                 constraint = lambda m : m@self.costs <= 1.001*budget and all(m[self.mappings[n]]@self.e[self.mappings[n]] >= 1 for n in range(self.n_outputs))
                 objective  = lambda m : max(self.variances(m))
 
                 samples,fval = best_closest_integer_solution_BLUE_multi(samples, [self.SAPS[n].psi for n in range(self.n_outputs)], self.costs, self.e, self.mappings, budget=budget)
+                if np.isinf(fval):
+                    print("Integer projection failed. Trying to recover by cleanup...")
+                    samples = self.cleanup_solution(old_samples)
+                    samples,fval = best_closest_integer_solution_BLUE_multi(samples, [self.SAPS[n].psi for n in range(self.n_outputs)], self.costs, self.e, self.mappings, budget=budget)
+
                 if np.isinf(fval):
                     print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
                     samples = self.gurobi_solve(budget=budget, integer=True)
@@ -123,10 +227,16 @@ class MOSAP(object):
             elif solver == "cvxpy":  samples = self.cvxpy_solve(eps=eps, cvxpy_params=solver_params)
 
             if not integer:
+                old_samples = samples.copy()
+
                 objective  = lambda m : m@self.costs
                 constraint = lambda m : all(m[self.mappings[n]]@self.e[self.mappings[n]] >= 1 for n in range(self.n_outputs)) and all(np.array(self.variances(m)) <= 1.001*np.array(eps)**2)
 
                 samples,fval = best_closest_integer_solution_BLUE_multi(samples, [self.SAPS[n].psi for n in range(self.n_outputs)], self.costs, self.e, self.mappings, eps=eps)
+                if np.isinf(fval):
+                    print("Integer projection failed. Trying to recover by cleanup...")
+                    samples = self.cleanup_solution(old_samples)
+                    samples,fval = best_closest_integer_solution_BLUE_multi(samples, [self.SAPS[n].psi for n in range(self.n_outputs)], self.costs, self.e, self.mappings, eps=eps)
 
                 if np.isinf(fval):
                     print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")

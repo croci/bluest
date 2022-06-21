@@ -39,6 +39,22 @@ void objectiveK_c(py::array_t<double, py::array::c_style> PHI, const int N, cons
     
 }
 
+void cleanupK_c(py::array_t<double, py::array::c_style> X, const int k, const int Lk, const py::array_t<long int, py::array::c_style> groupsk, const py::array_t<double, py::array::c_style> invcovsk, const py::array_t<double, py::array::c_style> invPHI_0){
+    const int ksq = k*k;
+    double * X_x = (double*) X.data(0);
+    const long int * groupsk_x = groupsk.data(0);
+    const double * invcovsk_x  = invcovsk.data(0);
+    const double * invPHI_0_x  = invPHI_0.data(0);
+    for(int i=0; i<Lk; i++){
+        for(int j=0; j<k; j++){
+            for(int l=0; l<k; l++){
+                X_x[Lk*groupsk_x[k*i+j] + i] = invcovsk_x[ksq*i + k*j + l]*invPHI_0_x[groupsk_x[k*i+l]];
+            }
+        }
+    }
+
+}
+
 void gradK_c(py::array_t<double, py::array::c_style> grad, const int k, const int Lk, const py::array_t<long int, py::array::c_style> groupsk, const py::array_t<double, py::array::c_style> invcovsk, const py::array_t<double, py::array::c_style> invPHI_0){
     const int ksq = k*k;
     double * grad_x = (double*) grad.data(0);
@@ -88,5 +104,6 @@ PYBIND11_MODULE(cmisc, m) {
     m.def("objectiveK_c", &objectiveK_c<long int>);
     m.def("gradK_c", &gradK_c);
     m.def("hessKQ_c", &hessKQ_c);
+    m.def("cleanupK_c", &cleanupK_c);
 
 }

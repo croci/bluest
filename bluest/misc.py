@@ -8,7 +8,7 @@ except ImportError:
             return func
         return decorator
 
-from .cmisc import assemble_psi_c,objectiveK_c,gradK_c,hessKQ_c
+from .cmisc import assemble_psi_c,objectiveK_c,gradK_c,hessKQ_c,cleanupK_c
 
 ##################################################################################################################
 
@@ -395,6 +395,17 @@ def variance_GH_full(m, psi, groups, sizes, invcovs, delta=0.0, nohess=False):
 
     return var,grad,hess
 
+def assemble_cleanup_matrix(m, psi, groups, sizes, invcovs, delta=0.0):
+    K = len(groups)
+
+    if abs(m).max() < 0.05: raise ValueError("No entry greater or equal than 1 found in m.")
+    PHI = get_phi_full(m,psi,delta=delta)
+
+    invPHI = np.linalg.pinv(PHI)
+
+    X = np.hstack([cleanupK(k, sizes[k], groups[k-1], invcovs[k-1], invPHI) for k in range(1,K+1)])
+    return X
+
 def PHIinvY0(m, y, psi, groups, cumsizes, delta=0.0):
     if abs(m).max() < 0.05: return np.inf
 
@@ -482,6 +493,12 @@ def assemble_psi(N,k,Lk,groupsk,invcovsk):
     assemble_psi_c(psi.ravel(order='C'), N, k, Lk, groupsk.ravel(order='C'), invcovsk)
     #assert np.allclose(psi, assemble_psi_numba(N,k,Lk,groupsk,invcovsk))
     return psi
+
+def cleanupK(k, Lk, groupsk, invcovsk, invPHI):
+    N = invPHI.shape[0]
+    X = np.zeros((N,Lk), order='C')
+    cleanupK_c(X.ravel(order='C'), k, Lk, groupsk.ravel(order='C'), invcovsk, invPHI[0])
+    return X
 
 def objectiveK(N, k,Lk,mk,groupsk,invcovsk):
     PHI = np.zeros((N*N,))

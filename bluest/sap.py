@@ -3,7 +3,7 @@ from itertools import combinations
 
 import cvxpy as cp
 
-from .misc import assemble_psi,get_phi_full,variance_full,variance_GH_full,PHIinvY0,best_closest_integer_solution_BLUE
+from .misc import assemble_psi,get_phi_full,variance_full,variance_GH_full,PHIinvY0,best_closest_integer_solution_BLUE,assemble_cleanup_matrix
 
 ########################################################
 
@@ -104,10 +104,13 @@ class SAP(object):
             return variance_full(m, self.psi, groups, cumsizes, delta=delta)
         def variance_GH(m, delta=0, nohess=False):
             return variance_GH_full(m, self.psi, groups, sizes, invcovs, delta=delta, nohess=nohess)
+        def get_cleanup_matrix(m, delta=0):
+            return assemble_cleanup_matrix(m, self.psi, groups, sizes, invcovs, delta=delta)
 
         self.get_phi = get_phi
         self.variance = variance
         self.variance_GH = variance_GH
+        self.get_cleanup_matrix = get_cleanup_matrix
 
     def solve(self, budget=None, eps=None, solver="cvxpy", integer=False, x0=None, solver_params=None):
         if budget is None and eps is None:
