@@ -1,6 +1,6 @@
 import numpy as np
 from itertools import combinations, product
-from .sap import SAP,mosek_params,cvxpy_default_params
+from .sap import SAP,mosek_params,cvxpy_default_params,cvxopt_default_params
 from .misc import best_closest_integer_solution_BLUE_multi
 
 import cvxpy as cp
@@ -213,6 +213,27 @@ class MOSAP(object):
         out = [bmat >> 0 for bmat in bmats]
         return out
 
+    def cvxpy_to_cvxopt(self,prob,cvxopt_params=cvxopt_default_params):
+        from scipy.sparse import csr_matrix, bmat, find
+        from cvxopt import matrix,spmatrix,solvers
+        import cvxpy as cp
+
+        probdata, _, _ = prob.get_problem_data(cp.CVXOPT)
+
+        def csr_to_cvxopt(A):
+            l = find(A)
+            out = spmatrix(l[-1],l[0],l[1], A.shape)
+            return out
+
+        c = matrix(probdata['c'])
+        G = csr_to_cvxopt(probdata['G'])
+        h = matrix(probdata['h'])
+        dims_tup = vars(probdata['dims'])
+        dims = {'l' : dims_tup['nonneg'], 'q': [], 's': dims_tup['psd']}
+
+        res = solvers.conelp(c, G, h, dims, options=cvxopt_params)
+        return res
+
     def cvxpy_solve(self, budget=None, eps=None, delta=0.0, cvxpy_params=None):
         budget, eps = self.check_input(budget, eps)
 
@@ -243,9 +264,13 @@ class MOSAP(object):
 
         prob = cp.Problem(obj, constraints)
 
+        res = self.cvxpy_to_cvxopt(prob)
+
         #prob.solve(verbose=True, solver="SCS")#, acceleration_lookback=0, acceleration_interval=0)
         #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
         prob.solve(verbose=True, solver="CVXOPT", **cvxpy_solver_params)
+
+        breakpoint()
 
         if budget is not None: m.value *= budget
         elif eps  is not None: m.value *= meps**-2
