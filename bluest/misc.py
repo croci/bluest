@@ -103,6 +103,7 @@ def get_feasible_integer_bounds(sol, N, e=None):
     L = len(sol)
     #val = np.sort(sol)[-int(1.2*N):][0] # you need to take at least -1*N or it will cause trouble to MLMC and MFMC routines
     idx = np.argsort(sol)[-int(1.2*N):] # you need to take at least -1*N or it will cause trouble to MLMC and MFMC routines
+    idx = np.array([item for item in idx if sol[item] > 1.0e-8])
     ss = np.round(sol).astype(int)
     #idx = np.argwhere(sol >= val).flatten()
     if e is not None:
