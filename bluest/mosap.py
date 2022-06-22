@@ -4,6 +4,13 @@ from .sap import SAP,mosek_params,cvxpy_default_params,cvxopt_default_params
 from .misc import best_closest_integer_solution_BLUE_multi
 
 import cvxpy as cp
+from scipy.sparse import csr_matrix, bmat, find
+from cvxopt import matrix,spmatrix,solvers
+
+def csr_to_cvxopt(A):
+    l = find(A)
+    out = spmatrix(l[-1],l[0],l[1], A.shape)
+    return out
 
 class MOSAP(object):
     ''' MOSAP, MultiObjectiveSampleAllocationProblem '''
@@ -192,7 +199,7 @@ class MOSAP(object):
     def solve(self, budget=None, eps=None, solver="cvxpy", integer=False, x0=None, solver_params=None):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
-        if solver not in ["gurobi", "scipy", "cvxpy", "ipopt"]:
+        if solver not in ["gurobi", "scipy", "cvxpy", "ipopt", "cvxopt"]:
             raise ValueError("Optimization solvers available: 'gurobi', 'scipy', 'ipopt' or 'cvxpy'")
         if integer: solver="gurobi"
 
@@ -200,6 +207,7 @@ class MOSAP(object):
             print("Minimizing statistical error for fixed cost...\n")
             if   solver == "gurobi": samples = self.gurobi_solve(budget=budget, integer=integer)
             elif solver == "cvxpy":  samples = self.cvxpy_solve(budget=budget, cvxpy_params=solver_params)
+            elif solver == "cvxopt": samples = self.cvxopt_solve(budget=budget, cvxopt_params=solver_params)
             elif solver == "ipopt":  samples = self.ipopt_solve(budget=budget, x0=x0)
             elif solver == "scipy":  samples = self.scipy_solve(budget=budget, x0=x0)
 
@@ -225,6 +233,7 @@ class MOSAP(object):
             elif solver == "scipy":  samples = self.scipy_solve(eps=eps, x0=x0)
             elif solver == "ipopt":  samples = self.ipopt_solve(eps=eps, x0=x0)
             elif solver == "cvxpy":  samples = self.cvxpy_solve(eps=eps, cvxpy_params=solver_params)
+            elif solver == "cvxopt": samples = self.cvxopt_solve(eps=eps, cvxopt_params=solver_params)
 
             if not integer:
                 old_samples = samples.copy()
@@ -301,6 +310,124 @@ class MOSAP(object):
 
         return np.array(m.X)
 
+    def cvxopt_get_sdp_constraints(self, budget=None, eps=None):
+        No       = self.n_outputs
+        N        = self.N
+        L        = self.L
+        mappings = self.mappings
+        psis     = [csr_matrix(self.SAPS[n].psi) for n in range(No)];
+        [psi.eliminate_zeros() for psi in psis]
+
+        assert all(psi.shape[1] == len(mapping) for psi,mapping in zip(psis, mappings))
+
+        scales = np.array([1/abs(psi).sum(axis=0).mean() for psi in psis])
+
+        Gs = []
+        hs = []
+        for n in range(No):
+            Nn = self.SAPS[n].N
+            Ln = len(mappings[n])
+
+            #sizes = self.SAPS[n].sizes
+            #a = np.concatenate([np.repeat(i**2,sizes[i]) for i in range(1,len(sizes))])
+            #b = np.repeat(mappings[n], a)
+
+            l = list(find(psis[n]))
+            idx = np.argsort(l[1]); l[1] = l[1][idx]; l[0] = l[0][idx]; l[-1] = l[-1][idx] #NOTE: l[1] should be already sorted
+
+            #NOTE: the following line maps the local Nn^2-by-Ln psi to a Nn^2-by-L psi by adding zero columns and reordering
+            l[1] = np.repeat(mappings[n], np.unique(l[1], return_counts=True)[1])
+
+            ##NOTE: the following 3 lines are just a check. Can remove if it works.
+            #psi_mat = csr_matrix((l[-1], (l[0], l[1]) ), shape=(Nn**2,L)) 
+            #mat = csr_matrix((np.ones((Ln,), dtype=bool), (np.arange(Ln), mappings[n]) ), shape=(Ln,L)) 
+            #assert(abs(psi_mat-psis[n]@mat).max() < 1.0e-14)
+
+            # can do the constraints in (Nn+1)-by-(Nn+1) shape
+            if budget is not None:
+                l[0] += l[0]//Nn; l[1] += 1; l[-1] = -np.concatenate([scales[n]*l[-1], [1]]); l[0] = np.concatenate([l[0],[(Nn+1)**2-1]]); l[1] = np.concatenate([l[1],[0]])
+                G1 = csr_matrix((l[-1],(l[0],l[1])), shape=((Nn+1)**2,L+1)); G1 = csr_to_cvxopt(G1)
+                h1 = np.zeros((Nn+1,Nn+1)); h1[-1,0] = np.sqrt(scales[n]); h1[0,-1] = np.sqrt(scales[n]); h1 = matrix(h1)
+
+            else:
+                l[0] += l[0]//Nn; l[-1] *= (-scales[n])
+                G1 = csr_matrix((l[-1], (l[0],l[1])), shape=((Nn+1)**2,L)); G1 = csr_to_cvxopt(G1)
+                h1 = np.zeros((Nn+1,Nn+1)); h1[-1,0] = np.sqrt(scales[n])/eps[n]; h1[0,-1] = np.sqrt(scales[n])/eps[n]; h1[-1,-1] = 1; h1 = matrix(h1)
+
+            Gs.append(G1)
+            hs.append(h1)
+
+        return Gs,hs
+
+    def cvxopt_solve(self, budget=None, eps=None, delta=0.0, cvxopt_params=None):
+        budget, eps = self.check_input(budget, eps)
+
+        No       = self.n_outputs
+        N        = self.N
+        L        = self.L
+        w        = self.costs.copy()
+        e        = self.e
+        mappings = self.mappings
+
+        cvxopt_solver_params = cvxopt_default_params.copy()
+        if cvxopt_params is not None:
+            cvxopt_solver_params.update(cvxopt_params)
+
+        es = []
+        for n in range(No):
+            ee = np.zeros((L,))
+            ee[mappings[n]] = e.copy()[mappings[n]]
+            es.append(ee)
+
+        if budget is not None:
+            wt  = np.concatenate([[0], w])
+            ets = [np.concatenate([[0], -ee]) for ee in es]
+
+            c = np.zeros((L+1,)); c[0] = 1.; c = matrix(c)
+
+            G0 = csr_matrix(np.vstack([-np.eye(L+1),wt] + ets)); G0.eliminate_zeros(); G0 = csr_to_cvxopt(G0)
+            h0 = np.concatenate([np.zeros((L+1,)), [1.], -np.ones((No,))/budget]); h0 = matrix(h0)
+
+        else:
+            meps = max(eps)
+            eps = eps/meps
+
+            c = matrix(w/np.linalg.norm(w))
+            ets = [-ee for ee in es]
+
+            G0 = csr_matrix(np.vstack([-np.eye(L)] + ets)); G0.eliminate_zeros(); G0 = csr_to_cvxopt(G0)
+            h0 = np.concatenate([np.zeros((L,)), (-meps**2)*np.ones((No,))]); h0 = matrix(h0)
+
+        Gs,hs = self.cvxopt_get_sdp_constraints(budget=budget, eps=eps)
+
+        res = solvers.sdp(c,Gl=G0,hl=h0,Gs=Gs,hs=hs,solver=None, options=cvxopt_solver_params)
+        
+        print(res)
+
+        if budget is not None:
+            m = np.maximum(np.array(res["x"]).flatten()[1:],0)
+            m *= budget
+        else:
+            m = np.maximum(np.array(res["x"]).flatten(),0)
+            m *= meps**-2
+
+        print(m.round())
+
+        return m
+
+    def cvxpy_to_cvxopt(self,prob,cvxopt_params=cvxopt_default_params):
+        probdata, _, _ = prob.get_problem_data(cp.CVXOPT)
+
+        c = matrix(probdata['c'])
+        G = csr_to_cvxopt(probdata['G'])
+        h = matrix(probdata['h'])
+        dims_tup = vars(probdata['dims'])
+        dims = {'l' : dims_tup['nonneg'], 'q': [], 's': dims_tup['psd']}
+
+        res = solvers.conelp(c, G, h, dims, options=cvxopt_params)
+
+        return res
+
     def cvxpy_get_multi_constraints(self, m, t=None, eps=None):
         mappings = self.mappings
         No       = self.n_outputs
@@ -322,27 +449,6 @@ class MOSAP(object):
 
         out = [bmat >> 0 for bmat in bmats]
         return out
-
-    def cvxpy_to_cvxopt(self,prob,cvxopt_params=cvxopt_default_params):
-        from scipy.sparse import csr_matrix, bmat, find
-        from cvxopt import matrix,spmatrix,solvers
-        import cvxpy as cp
-
-        probdata, _, _ = prob.get_problem_data(cp.CVXOPT)
-
-        def csr_to_cvxopt(A):
-            l = find(A)
-            out = spmatrix(l[-1],l[0],l[1], A.shape)
-            return out
-
-        c = matrix(probdata['c'])
-        G = csr_to_cvxopt(probdata['G'])
-        h = matrix(probdata['h'])
-        dims_tup = vars(probdata['dims'])
-        dims = {'l' : dims_tup['nonneg'], 'q': [], 's': dims_tup['psd']}
-
-        res = solvers.conelp(c, G, h, dims, options=cvxopt_params)
-        return res
 
     def cvxpy_solve(self, budget=None, eps=None, delta=0.0, cvxpy_params=None):
         budget, eps = self.check_input(budget, eps)
@@ -374,13 +480,11 @@ class MOSAP(object):
 
         prob = cp.Problem(obj, constraints)
 
-        res = self.cvxpy_to_cvxopt(prob)
+        #res = self.cvxpy_to_cvxopt(prob)
 
         #prob.solve(verbose=True, solver="SCS")#, acceleration_lookback=0, acceleration_interval=0)
         #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
         prob.solve(verbose=True, solver="CVXOPT", **cvxpy_solver_params)
-
-        breakpoint()
 
         if budget is not None: m.value *= budget
         elif eps  is not None: m.value *= meps**-2
@@ -439,7 +543,6 @@ class MOSAP(object):
 
     def ipopt_solve(self, budget=None, eps=None, x0=None):
         from cyipopt import minimize_ipopt
-        from scipy.sparse import csr_matrix
 
         budget, eps = self.check_input(budget, eps)
 

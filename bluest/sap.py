@@ -2,6 +2,8 @@ import numpy as np
 from itertools import combinations
 
 import cvxpy as cp
+from scipy.sparse import csr_matrix, bmat, find
+from cvxopt import matrix,spmatrix,solvers
 
 from .misc import assemble_psi,get_phi_full,variance_full,variance_GH_full,PHIinvY0,best_closest_integer_solution_BLUE,assemble_cleanup_matrix
 
@@ -36,6 +38,11 @@ cvxopt_default_params = {
 }
 
 ########################################################
+
+def csr_to_cvxopt(A):
+    l = find(A)
+    out = spmatrix(l[-1],l[0],l[1], A.shape)
+    return out
 
 class SAP(object):
     def __init__(self, C, K, groups, costs):
@@ -251,14 +258,6 @@ class SAP(object):
         return np.array(m.X)
 
     def cvxopt_solve(self, budget=None, eps=None, delta=0.0, cvxopt_params=None):
-        from scipy.sparse import csr_matrix, bmat, find
-        from cvxopt import matrix,spmatrix,solvers
-
-        def csr_to_cvxopt(A):
-            l = find(A)
-            out = spmatrix(l[-1],l[0],l[1], A.shape)
-            return out
-
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
 
@@ -313,13 +312,6 @@ class SAP(object):
         return m
 
     def cvxpy_to_cvxopt(self,probdata):
-        from scipy.sparse import csr_matrix, bmat, find
-        from cvxopt import matrix,spmatrix,solvers
-
-        def csr_to_cvxopt(A):
-            l = find(A)
-            out = spmatrix(l[-1],l[0],l[1], A.shape)
-            return out
 
         c = matrix(probdata['c'])
         G = csr_to_cvxopt(probdata['G'])
@@ -328,6 +320,7 @@ class SAP(object):
         dims = {'l' : dims_tup['nonneg'], 'q': [], 's': dims_tup['psd']}
 
         res = solvers.conelp(c, G, h, dims, options=cvxopt_default_params)
+
         return res
 
     def cvxpy_fun(self, m, t=None, eps=None):
