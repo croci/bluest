@@ -154,7 +154,7 @@ def best_closest_integer_solution_BLUE_multi(sol, psis, w, e, mappings, budget=N
         print('WARNING! Too many dimensions to brute-force it. Randomising search. Note: result might not be optimal.')
         best_val = None; best_fval = np.inf
         trial = 0
-        while best_val is None and trial < 500:
+        while best_val is None and trial < 250:
             trial += 1
             print("Randomisation n %d." % trial)
 

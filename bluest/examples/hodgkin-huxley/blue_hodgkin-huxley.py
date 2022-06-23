@@ -419,25 +419,26 @@ if __name__ == '__main__':
         if solver_test:
 
             from gurobipy import GurobiError
+
+            eps = np.sqrt(vals)/1000; #budget = max(costs)*10**3
+
             K = 3
 
-            #try: out_ipopt = problem.setup_solver(K=K, budget=budget, solver="ipopt")
-            #except GurobiError: out_ipopt = [None, {'errors':None, 'total_cost':None}]
-            #out_cvxpy = problem.setup_solver(K=K, budget=budget, solver="cvxpy", optimization_solver_params={'feastol':1.e-5})
-            #try: out_scipy = problem.setup_solver(K=K, budget=budget, solver="scipy")
-            #except GurobiError: out_scipy = [None, {'errors':None, 'total_cost':None}]
-            #errs = (out_cvxpy[1]['errors'], out_ipopt[1]['errors'], out_scipy[1]['errors'])
+            #out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
+            #out_cvxopt = problem.setup_solver(K=K, budget=budget, solver="cvxopt", optimization_solver_params={'feastol':1.e-5})[1]
+            #out_cvxpy  = problem.setup_solver(K=K, budget=budget, solver="cvxpy", optimization_solver_params={'feastol':1.e-5})[1]
+            #out_ipopt  = problem.setup_solver(K=K, budget=budget, solver="ipopt")[1]
+            #out_scipy  = problem.setup_solver(K=K, budget=budget, solver="scipy")[1]
+            #out1 = (out_cvxpy, out_cvxopt, out_ipopt, out_scipy); [out.pop('samples') for out in out1 if out is not None]
+
+            out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
+            out_cvxopt = problem.setup_solver(K=K, eps=eps, solver="cvxopt", optimization_solver_params={'feastol':5.e-6})[1]
+            out_cvxpy  = problem.setup_solver(K=K, eps=eps, solver="cvxpy", optimization_solver_params={'feastol':5.e-6})[1]
+            #out_ipopt  = problem.setup_solver(K=K, eps=eps, solver="ipopt")[1]
+            #out_scipy  = problem.setup_solver(K=K, eps=eps, solver="scipy")[1]
+            out2 = (out_cvxpy, out_cvxopt, out_ipopt, out_scipy); [out.pop('samples') for out in out2 if out is not None]
             
-            out_cvxpy = problem.setup_solver(K=K, eps=eps, solver="cvxpy", optimization_solver_params={'feastol':1.e-7})
-            try: out_ipopt = problem.setup_solver(K=K, eps=eps, solver="ipopt")
-            except GurobiError: out_ipopt = [None, {'errors':None, 'total_cost':None}]
-            #try: out_scipy = problem.setup_solver(K=K, eps=eps, solver="scipy")
-            #except GurobiError: out_scipy = [None, {'errors':None, 'total_cost':None}]
-            #costs = (out_cvxpy[1]['total_cost'], out_ipopt[1]['total_cost'], out_scipy[1]['total_cost'])
-            costs = (out_cvxpy[1]['total_cost'], out_ipopt[1]['total_cost'])
-            
-            #print(errs, costs)
-            print(costs)
+            print(out1, "\n", out2)
 
             sys.exit(0)
 

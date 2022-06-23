@@ -180,24 +180,23 @@ if variance_test:
 
 if solver_test:
 
-    from gurobipy import GurobiError
-    K = 3; eps = 0.025; budget = 10.
+    K = 3; eps = 0.0005; budget = 1000.
 
-    try: out_ipopt = problem.setup_solver(K=K, budget=budget, solver="ipopt")
-    except GurobiError: out_ipopt = [None, {'errors':None, 'total_cost':None}]
-    out_cvxpy = problem.setup_solver(K=K, budget=budget, solver="cvxpy", optimization_solver_params={'feastol':1.e-5})
-    try: out_scipy = problem.setup_solver(K=K, budget=budget, solver="scipy")
-    except GurobiError: out_scipy = [None, {'errors':None, 'total_cost':None}]
-    errs = (out_cvxpy[1]['errors'], out_ipopt[1]['errors'], out_scipy[1]['errors'])
+    out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
+    out_cvxopt = problem.setup_solver(K=K, budget=budget, solver="cvxopt", optimization_solver_params={'feastol':1.e-5})[1]
+    out_cvxpy  = problem.setup_solver(K=K, budget=budget, solver="cvxpy", optimization_solver_params={'feastol':1.e-5})[1]
+    out_ipopt  = problem.setup_solver(K=K, budget=budget, solver="ipopt")[1]
+    out_scipy  = problem.setup_solver(K=K, budget=budget, solver="scipy")[1]
+    out1 = (out_cvxpy, out_cvxopt, out_ipopt, out_scipy); [out.pop('samples') for out in out1 if out is not None]
+
+    out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
+    out_cvxopt = problem.setup_solver(K=K, eps=eps, solver="cvxopt", optimization_solver_params={'feastol':1.e-7})[1]
+    out_cvxpy  = problem.setup_solver(K=K, eps=eps, solver="cvxpy", optimization_solver_params={'feastol':1.e-7})[1]
+    out_ipopt  = problem.setup_solver(K=K, eps=eps, solver="ipopt")[1]
+    out_scipy  = problem.setup_solver(K=K, eps=eps, solver="scipy")[1]
+    out2 = (out_cvxpy, out_cvxopt, out_ipopt, out_scipy); [out.pop('samples') for out in out2 if out is not None]
     
-    try: out_ipopt = problem.setup_solver(K=K, eps=eps, solver="ipopt")
-    except GurobiError: out_ipopt = [None, {'errors':None, 'total_cost':None}]
-    out_cvxpy = problem.setup_solver(K=K, eps=eps, solver="cvxpy", optimization_solver_params={'feastol':1.e-7})
-    try: out_scipy = problem.setup_solver(K=K, eps=eps, solver="scipy")
-    except GurobiError: out_scipy = [None, {'errors':None, 'total_cost':None}]
-    costs = (out_cvxpy[1]['total_cost'], out_ipopt[1]['total_cost'], out_scipy[1]['total_cost'])
-    
-    print(errs, costs)
+    print(out1, "\n", out2)
 
     sys.exit(0)
 

@@ -195,64 +195,70 @@ class MOSAP(object):
 
         return m
 
-
-    def solve(self, budget=None, eps=None, solver="cvxpy", integer=False, x0=None, solver_params=None):
+    def integer_projection(self, samples, budget=None, eps=None):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
-        if solver not in ["gurobi", "scipy", "cvxpy", "ipopt", "cvxopt"]:
-            raise ValueError("Optimization solvers available: 'gurobi', 'scipy', 'ipopt' or 'cvxpy'")
-        if integer: solver="gurobi"
 
-        if eps is None:
-            print("Minimizing statistical error for fixed cost...\n")
-            if   solver == "gurobi": samples = self.gurobi_solve(budget=budget, integer=integer)
-            elif solver == "cvxpy":  samples = self.cvxpy_solve(budget=budget, cvxpy_params=solver_params)
-            elif solver == "cvxopt": samples = self.cvxopt_solve(budget=budget, cvxopt_params=solver_params)
-            elif solver == "ipopt":  samples = self.ipopt_solve(budget=budget, x0=x0)
-            elif solver == "scipy":  samples = self.scipy_solve(budget=budget, x0=x0)
+        print("Integer projection...")
 
-            if not integer:
-                old_samples = samples.copy()
+        def increase_tolerance(budget, eps, fac):
+            if budget is None: b = None
+            else:              b = budget*(1 + fac)
+            if eps is None: e = None
+            else:              e = np.sqrt(np.array(eps)**2*(1+fac))
+            return b,e
 
-                constraint = lambda m : m@self.costs <= 1.001*budget and all(m[self.mappings[n]]@self.e[self.mappings[n]] >= 1 for n in range(self.n_outputs))
-                objective  = lambda m : max(self.variances(m))
+        ss = samples.copy()
 
-                samples,fval = best_closest_integer_solution_BLUE_multi(samples, [self.SAPS[n].psi for n in range(self.n_outputs)], self.costs, self.e, self.mappings, budget=budget)
-                if np.isinf(fval):
-                    print("Integer projection failed. Trying to recover by cleanup...")
-                    samples = self.cleanup_solution(old_samples)
-                    samples,fval = best_closest_integer_solution_BLUE_multi(samples, [self.SAPS[n].psi for n in range(self.n_outputs)], self.costs, self.e, self.mappings, budget=budget)
+        # STEP 0: standard
+        samples,fval = best_closest_integer_solution_BLUE_multi(ss, [self.SAPS[n].psi for n in range(self.n_outputs)], self.costs, self.e, self.mappings, budget=budget, eps=eps)
 
-                if np.isinf(fval):
-                    print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
-                    samples = self.gurobi_solve(budget=budget, integer=True)
+        # STEP 1: cleanup + standard
+        if np.isinf(fval):
+            print("Integer projection failed. Trying to recover by cleanup...")
+            css = self.cleanup_solution(ss)
+            samples,fval = best_closest_integer_solution_BLUE_multi(css, [self.SAPS[n].psi for n in range(self.n_outputs)], self.costs, self.e, self.mappings, budget=budget, eps=eps)
 
-        else:
-            print("Minimizing cost given statistical error tolerance...\n")
-            if   solver == "gurobi": samples = self.gurobi_solve(eps=eps, integer=integer)
-            elif solver == "scipy":  samples = self.scipy_solve(eps=eps, x0=x0)
-            elif solver == "ipopt":  samples = self.ipopt_solve(eps=eps, x0=x0)
-            elif solver == "cvxpy":  samples = self.cvxpy_solve(eps=eps, cvxpy_params=solver_params)
-            elif solver == "cvxopt": samples = self.cvxopt_solve(eps=eps, cvxopt_params=solver_params)
+        # STEP 2: increase tolerances
+        if np.isinf(fval):
+            for i in reversed(range(4)):
+                print("WARNING! An integer solution satisfying the constraints could not be found. Increasing the tolerance/budget.\n")
+                fac = 10.**-i
+                new_budget,new_eps = increase_tolerance(budget,eps,fac)
 
-            if not integer:
-                old_samples = samples.copy()
+                samples,fval = best_closest_integer_solution_BLUE_multi(ss, [self.SAPS[n].psi for n in range(self.n_outputs)],  self.costs, self.e, self.mappings, budget=new_budget, eps=new_eps)
+                if np.isinf(fval): samples,fval = best_closest_integer_solution_BLUE_multi(css, [self.SAPS[n].psi for n in range(self.n_outputs)], self.costs, self.e, self.mappings, budget=new_budget, eps=new_eps)
+                if not np.isinf(fval): break
 
-                objective  = lambda m : m@self.costs
-                constraint = lambda m : all(m[self.mappings[n]]@self.e[self.mappings[n]] >= 1 for n in range(self.n_outputs)) and all(np.array(self.variances(m)) <= 1.001*np.array(eps)**2)
+        # STEP 3: Round up
+        if np.isinf(fval):
+            print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget. Rounding up.\n")
+            ss  = np.ceil(ss);  tot_cost_ss = ss@self.costs;    var_ss = max(self.variances(ss))
+            css = np.ceil(css); tot_cost_css = css@self.costs; var_css = max(self.variances(css))
+            if eps is None:
+                if tot_cost_ss < tot_cost_css: samples = ss
+                else:                          samples = css
+            else:
+                if var_ss < var_css: samples = ss
+                else:                samples = css
 
-                samples,fval = best_closest_integer_solution_BLUE_multi(samples, [self.SAPS[n].psi for n in range(self.n_outputs)], self.costs, self.e, self.mappings, eps=eps)
-                if np.isinf(fval):
-                    print("Integer projection failed. Trying to recover by cleanup...")
-                    samples = self.cleanup_solution(old_samples)
-                    samples,fval = best_closest_integer_solution_BLUE_multi(samples, [self.SAPS[n].psi for n in range(self.n_outputs)], self.costs, self.e, self.mappings, eps=eps)
+        return samples.astype(int)
 
-                if np.isinf(fval):
-                    print("WARNING! An integer solution satisfying the constraints could not be found. Running Gurobi optimizer with integer constraints.\n")
-                    samples = self.gurobi_solve(eps=eps, integer=True)
+    def solve(self, budget=None, eps=None, solver="cvxpy", x0=None, solver_params=None):
+        if budget is None and eps is None:
+            raise ValueError("Need to specify either budget or RMSE tolerance")
+        if solver not in ["scipy", "cvxpy", "ipopt", "cvxopt"]:
+            raise ValueError("Optimization solvers available: 'scipy', 'ipopt', 'cvxopt' or 'cvxpy'")
 
+        if eps is None: print("Minimizing statistical error for fixed cost...\n")
+        else:           print("Minimizing cost given statistical error tolerance...\n")
 
-        samples = samples.astype(int)
+        if   solver == "cvxpy":  samples = self.cvxpy_solve(budget=budget, eps=eps, cvxpy_params=solver_params)
+        elif solver == "cvxopt": samples = self.cvxopt_solve(budget=budget, eps=eps, cvxopt_params=solver_params)
+        elif solver == "ipopt":  samples = self.ipopt_solve(budget=budget, eps=eps, x0=x0)
+        elif solver == "scipy":  samples = self.scipy_solve(budget=budget, eps=eps, x0=x0)
+
+        samples = self.integer_projection(samples, budget=budget, eps=eps)
 
         self.samples = samples
         self.budget = budget
@@ -262,53 +268,6 @@ class MOSAP(object):
             self.SAPS[n].samples = samples[self.mappings[n]]
 
         return samples
-
-    def gurobi_solve(self, budget=None, eps=None, integer=False):
-        budget, eps = self.check_input(budget, eps)
-
-        from gurobipy import Model,GRB
-
-        L        = self.L
-        N        = self.N
-        No       = self.n_outputs
-        w        = self.costs
-        e        = self.e
-        mappings = self.mappings
-
-        es = []
-        for n in range(No):
-            ee = np.zeros((L,))
-            ee[mappings[n]] = e.copy()[mappings[n]]
-            es.append(ee)
-
-        M = Model("BLUE")
-        M.params.NonConvex = 2
-
-        m = M.addMVar(shape=(int(L),), lb=np.zeros((L,)), ub=np.ones((L,))*np.inf,vtype=GRB.CONTINUOUS, name="m")
-        if integer: m.vType = GRB.INTEGER
-
-        t = [M.addMVar(shape=(N,), vtype=GRB.CONTINUOUS, name="t%d" % n) for n in range(No)]
-
-        if eps is not None:
-            M.setObjective(m@w, GRB.MINIMIZE)
-            M.addConstrs((t[n][0] <= eps[n]**2 for n in range(No)), name="variance")
-            M.addConstrs((m@es[n] >= 1 for n in range(No)), name="minimum_samples")
-        else:
-            tt = M.addVar(vtype=GRB.CONTINUOUS, name="tmax")
-            M.setObjective(tt, GRB.MINIMIZE)
-            M.addConstr(m@w <= budget, name="budget")
-            M.addConstrs((m@es[n] >= 1 for n in range(No)), name="minimum_samples")
-            M.addConstrs((tt >= t[n][0] for n in range(No)), name="max_constraint")
-
-        # enforcing the constraint that PHI^{-1}[:,0] = t
-        for n in range(No):
-            constr = self.SAPS[n].gurobi_constraint(m,t[n])
-            M.addConstr(constr[0] == 1)
-            M.addConstrs((constr[i] == 0 for i in range(1,N)))
-
-        M.optimize()
-
-        return np.array(m.X)
 
     def cvxopt_get_sdp_constraints(self, budget=None, eps=None):
         No       = self.n_outputs
@@ -612,13 +571,13 @@ if __name__ == '__main__':
 
     problem = SAP(C, KK, groups, costs)
 
-    scipy_sol,cvxpy_sol,gurobi_sol = None,None,None
+    scipy_sol,cvxpy_sol,cvxopt_sol,ipopt_sol = None,None,None,None
+    ipopt_sol  = problem.solve(budget=budget, solver="ipopt")
+    cvxopt_sol = problem.solve(budget=budget, solver="cvxopt")
     cvxpy_sol  = problem.solve(budget=budget, solver="cvxpy")
     scipy_sol  = problem.solve(budget=budget, solver="scipy")
-    gurobi_sol = problem.solve(budget=budget, solver="gurobi")
-    #gurobi_eps_sol = problem.solve(eps=eps, solver="gurobi")
 
-    sols = [gurobi_sol, cvxpy_sol, scipy_sol]
+    sols = [cvxopt_sol, cvxpy_sol, ipopt_sol, scipy_sol]
     fvals = [problem.variance(sol) for sol in sols if sol is not None]
 
     print(fvals)
