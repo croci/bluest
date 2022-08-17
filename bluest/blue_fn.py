@@ -205,7 +205,10 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
                 for key in old_dict.keys():
                     if "values" in key or "inputs" in key:
                         old_dict[key] += outdict[key]
-                old_dict["n_samples"] += N
+                if isinstance(old_dict["n_samples"], list):
+                    old_dict["n_samples"][0] += N
+                else:
+                    old_dict["n_samples"] += N
                 outdict = old_dict
                 
             savez_compressed(filename, **outdict)
