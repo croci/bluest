@@ -112,28 +112,25 @@ if __name__ == "__main__":
 
     solver_test = True
     if solver_test:
-        from cvxpy.error import SolverError
-
-        eps = 0.01*abs(mus)/100; budget = max(costs)*100
-        K = 3
-
-        out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
-        out_cvxopt = problem.setup_solver(K=K, budget=budget, solver="cvxopt", optimization_solver_params={'feastol':1.e-7, 'maxiters':100, 'abstol':1.e-6, 'reltol':1.0e-4})[1]
-        try: out_cvxpy  = problem.setup_solver(K=K, budget=budget, solver="cvxpy", optimization_solver_params={'feastol':1.e-7, 'max_iters':100})[1]
-        except SolverError: pass
-        out_ipopt  = problem.setup_solver(K=K, budget=budget, solver="ipopt")[1]
-        #out_scipy  = problem.setup_solver(K=K, budget=budget, solver="scipy")[1]
-        out1 = (out_cvxpy, out_cvxopt, out_ipopt, out_scipy); [out.pop('samples') for out in out1 if out is not None]
+        from time import time
+        K = 4; eps = 0.01*abs(mus)/100; budget = max(costs)*100
+        OUT = [[],[]]
 
         out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
-        out_cvxopt = problem.setup_solver(K=K, eps=eps, solver="cvxopt", optimization_solver_params={'feastol':1.e-7})[1]
-        try: out_cvxpy  = problem.setup_solver(K=K, eps=eps, solver="cvxpy", optimization_solver_params={'feastol':1.e-7})[1]
-        except SolverError: pass
-        out_ipopt  = problem.setup_solver(K=K, eps=eps, solver="ipopt")[1]
-        #out_scipy  = problem.setup_solver(K=K, eps=eps, solver="scipy")[1]
-        out2 = (out_cvxpy, out_cvxopt, out_ipopt, out_scipy); [out.pop('samples') for out in out2 if out is not None]
-        
-        print(out1, "\n", out2)
+        for i in range(2):
+            for solver in ["cvxpy", "ipopt"]:
+                tic = time()
+                if i == 0: out = problem.setup_solver(K=K, budget=budget, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-3, 'abstol':1e-5, 'reltol':1e-2})[1]
+                else:      out = problem.setup_solver(K=K, eps=eps, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-7})[1]
+                toc = time() - tic
+                out = np.array([max(out['errors']), out['total_cost'], toc])
+                OUT[i].append(out)
+
+            OUT[i] = np.vstack(OUT[i])
+
+        for i in range(2):
+            print("\terrors\t   total cost\t   time\n")
+            print(OUT[i], "\n")
 
         sys.exit(0)
 

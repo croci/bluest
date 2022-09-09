@@ -150,6 +150,30 @@ C[np.isnan(C)] = np.inf
 
 eps = 5.e-2
 
+solver_test = True
+if solver_test:
+    from time import time
+    K = 3; eps = 1.e-2; budget = 1e5
+    OUT = [[],[]]
+
+    out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
+    for i in range(2):
+        for solver in ["cvxopt", "cvxpy", "ipopt", "scipy"]:
+            tic = time()
+            if i == 0: out = problem.setup_solver(K=K, budget=budget, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-3, 'abstol':1e-5, 'reltol':1e-2})[1]
+            else:      out = problem.setup_solver(K=K, eps=eps, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-7})[1]
+            toc = time() - tic
+            out = np.array([max(out['errors']), out['total_cost'], toc])
+            OUT[i].append(out)
+
+        OUT[i] = np.vstack(OUT[i])
+
+    for i in range(2):
+        print("\terrors\t   total cost\t   time\n")
+        print(OUT[i], "\n")
+
+    import sys; sys.exit(0)
+
 problem.setup_solver(K=3, eps=eps)
 problem.setup_mlmc(eps=eps)
 problem.setup_mfmc(eps=eps)

@@ -244,7 +244,7 @@ class MOSAP(object):
 
         return samples.astype(int)
 
-    def solve(self, budget=None, eps=None, solver="cvxpy", x0=None, solver_params=None):
+    def solve(self, budget=None, eps=None, solver="cvxpy", x0=None, continuous_relaxation=False, solver_params=None):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         if solver not in ["scipy", "cvxpy", "ipopt", "cvxopt"]:
@@ -258,7 +258,8 @@ class MOSAP(object):
         elif solver == "ipopt":  samples = self.ipopt_solve(budget=budget, eps=eps, x0=x0)
         elif solver == "scipy":  samples = self.scipy_solve(budget=budget, eps=eps, x0=x0)
 
-        samples = self.integer_projection(samples, budget=budget, eps=eps)
+        if not continuous_relaxation:
+            samples = self.integer_projection(samples, budget=budget, eps=eps)
 
         self.samples = samples
         self.budget = budget
@@ -348,7 +349,9 @@ class MOSAP(object):
             h0 = np.concatenate([np.zeros((L+1,)), [1.], -np.ones((No,))/budget]); h0 = matrix(h0)
 
         else:
-            meps = max(eps)
+            # compute scaling heuristically based on MC samples
+            n_MC_samples = max([CC[0,0]/ep**2 for CC,ep in zip(self.C,eps)])
+            meps = max(eps); meps=100/np.sqrt(n_MC_samples)
             eps = eps/meps
 
             c = matrix(w/np.linalg.norm(w))
@@ -431,7 +434,9 @@ class MOSAP(object):
             constraints = [w@m <= 1, *self.cvxpy_get_multi_constraints(m, t=t, eps=None)]
             constraints += [m[mappings[n]]@e[mappings[n]] >= 1./budget for n in range(self.n_outputs)]
         else:
-            meps = max(eps)
+            # compute scaling heuristically based on MC samples
+            n_MC_samples = max([CC[0,0]/ep**2 for CC,ep in zip(self.C,eps)])
+            meps = max(eps); meps=100/np.sqrt(n_MC_samples)
             eps = eps/meps
             obj = cp.Minimize((w/np.linalg.norm(w))@m)
             constraints = [*self.cvxpy_get_multi_constraints(m, t=None, eps=eps)]
@@ -445,8 +450,9 @@ class MOSAP(object):
         #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
         prob.solve(verbose=True, solver="CVXOPT", **cvxpy_solver_params)
 
+        print(m.value)
         if budget is not None: m.value *= budget
-        elif eps  is not None: m.value *= meps**-2
+        elif eps  is not None: m.value /= meps**2
 
         print(m.value.round())
         return m.value
@@ -534,17 +540,19 @@ class MOSAP(object):
             constraint2 = [{'type':'ineq', 'fun': lambda x : budget - w@x[1:], 'jac': lambda x : np.concatenate([np.zeros((1,)),-w]), 'hess': lambda x,p : csr_matrix((len(x),len(x)))*float(p)}]
             constraint4 = [{'type':'ineq', 'fun': lambda x,nn=n : x[0] - self.SAPS[nn].variance(x[1:][mappings[nn]],delta=delta), 'jac' : lambda x,nn=n : np.concatenate([[1],-self.SAPS[nn].variance_GH(x[1:][mappings[nn]],nohess=True,delta=delta)[1]]), 'hess': lambda x,p,nn=n : np.block([[0, np.zeros((1,len(x)-1))],[np.zeros((len(x)-1,1)), -self.SAPS[nn].variance_GH(x[1:][mappings[nn]],delta=delta)[2]]])*p} for n in range(No)]
 
-            if x0 is None: x0 = np.ceil(budget*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w); x0 = np.concatenate([[max_variance(x0,delta=delta)], x0])
-            res = minimize_ipopt(lambda x : (x[0], eee), x0, jac=True, hess=lambda x : csr_matrix((len(x),len(x))), bounds=constraint1, constraints=constraint2+constraint3+constraint4, options=options, tol = 1.0e-12)
+            if x0 is None: x0 = np.ceil(budget*abs(np.ones((L,)))); x0 - (x0@w-budget)*w/(w@w); x0 = np.concatenate([[max_variance(x0,delta=delta)], x0])
+            res = minimize_ipopt(lambda x : (x[0], eee), x0, jac=True, hess=lambda x : csr_matrix((len(x),len(x))), bounds=constraint1, constraints=constraint2+constraint3+constraint4, options=options, tol = 1.0e-14)
 
         else:
-            meps = max(eps)
+            # compute scaling heuristically based on MC samples
+            n_MC_samples = max([CC[0,0]/ep**2 for CC,ep in zip(self.C,eps)])
+            meps = max(eps); meps=100/np.sqrt(n_MC_samples);
             eps = eps/meps
             epsq = eps**2
             constraint1 = [(0, np.inf) for i in range(L)]
             constraint3 = [{'type':'ineq', 'fun': lambda x,ee=ees : ee@x-1*meps**2, 'jac': lambda x,ee=ees : ee, 'hess': lambda x,p : csr_matrix((len(x),len(x)))*float(p)} for ees in es]
             constraint2 = [{'type':'ineq', 'fun': lambda x,n=nn : epsq[n] - self.SAPS[n].variance(x[mappings[n]],delta=delta), 'jac': lambda x,n=nn : -self.SAPS[n].variance_GH(x[mappings[n]],nohess=True,delta=delta)[1], 'hess': lambda x,p,n=nn : -self.SAPS[n].variance_GH(x[mappings[n]],delta=delta)[2]*p} for nn in range(No)]
-            if x0 is None: x0 = np.ceil(np.linalg.norm(eps)**-2*np.random.rand(L))
+            if x0 is None: x0 = np.ceil(np.linalg.norm(eps)**-2*np.ones((L,)))
             res = minimize_ipopt(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hess=lambda x : csr_matrix((len(x),len(x))), bounds=constraint1, constraints=constraint2 + constraint3, options=options, tol = 1.0e-12)
 
         if budget is not None: res.x = res.x[1:]

@@ -445,7 +445,7 @@ class BLUEProblem(object):
     def blue_fn(self, ls, N, verbose=True, compute_mlmc_differences=False):
         return blue_fn(ls, N, self, sampler=self.sampler, inners=self.get_models_inner_products(), comm = self.get_comm(), N1=self.params["sample_batch_size"], No=self.n_outputs, compute_mlmc_differences=compute_mlmc_differences, verbose=verbose, filename=self.params["samplefile"], outputs_to_save=self.params["outputs_to_save"])
 
-    def setup_solver(self, K=3, budget=None, eps=None, groups=None, multi_groups=None, solver=None, optimization_solver_params=None):
+    def setup_solver(self, K=3, budget=None, eps=None, groups=None, multi_groups=None, solver=None, continuous_relaxation=False, optimization_solver_params=None):
         if budget is None and eps is None: raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None: eps = None
         if eps is not None and isinstance(eps,(int,float,np.int,np.float)): eps = [eps for n in range(self.n_outputs)]
@@ -506,7 +506,7 @@ class BLUEProblem(object):
         if self.verbose: print("Computing optimal sample allocation...")
         if self.mpiRank == 0:
             self.MOSAP = MOSAP(C, K, Ks, groups, multi_groups, costs, multi_costs)
-            self.MOSAP.solve(eps=eps, budget=budget, solver=solver, solver_params=optimization_solver_params)
+            self.MOSAP.solve(eps=eps, budget=budget, solver=solver, continuous_relaxation=continuous_relaxation, solver_params=optimization_solver_params)
             Vs = self.MOSAP.variances(self.MOSAP.samples)
 
             cost_BLUE = self.MOSAP.tot_cost

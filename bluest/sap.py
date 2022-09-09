@@ -161,7 +161,7 @@ class SAP(object):
 
         return samples.astype(int)
     
-    def solve(self, budget=None, eps=None, solver="cvxpy", x0=None, solver_params=None):
+    def solve(self, budget=None, eps=None, solver="cvxpy", x0=None, continuous_relaxation=False, solver_params=None):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         if solver not in ["scipy", "cvxpy", "ipopt", "cvxopt"]:
@@ -175,7 +175,8 @@ class SAP(object):
         elif solver == "scipy":  samples = self.scipy_solve(budget=budget, eps=eps, x0=x0)
         elif solver == "ipopt":  samples = self.ipopt_solve(budget=budget, eps=eps, x0=x0)
 
-        samples = self.integer_projection(samples, budget=budget, eps=eps)
+        if not continuous_relaxation:
+            samples = self.integer_projection(samples, budget=budget, eps=eps)
 
         self.samples = samples
         self.budget = budget

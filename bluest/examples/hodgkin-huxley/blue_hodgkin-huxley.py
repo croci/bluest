@@ -344,7 +344,7 @@ Np = len(neuron_problems)
 M = 4*Np
 No = 5 - int(no_Na_curr)
 
-costs = np.array([problem.M*problem.W.dim()**3 for problem in neuron_problems] + [problem.M*problem.Wfn.dim()**3 for problem in neuron_problems] + [4*problem.M for problem in neuron_problems] + [2*problem.M for problem in neuron_problems]); costs = costs/min(costs)
+costs = np.array([problem.M*problem.W.dim()**3 for problem in neuron_problems] + [problem.M*problem.Wfn.dim()**3 for problem in neuron_problems] + [4*problem.M for problem in neuron_problems] + [2*problem.M for problem in neuron_problems]); costs = costs/np.mean(costs)
 
 class BLUENeuronProblem(BLUEProblem):
     def sampler(self, ls, N=1):
@@ -417,28 +417,27 @@ if __name__ == '__main__':
 
         solver_test = True
         if solver_test:
-
-            from gurobipy import GurobiError
-
-            eps = np.sqrt(vals)/1000; #budget = max(costs)*10**3
-
-            K = 3
-
-            #out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
-            #out_cvxopt = problem.setup_solver(K=K, budget=budget, solver="cvxopt", optimization_solver_params={'feastol':1.e-5})[1]
-            #out_cvxpy  = problem.setup_solver(K=K, budget=budget, solver="cvxpy", optimization_solver_params={'feastol':1.e-5})[1]
-            #out_ipopt  = problem.setup_solver(K=K, budget=budget, solver="ipopt")[1]
-            #out_scipy  = problem.setup_solver(K=K, budget=budget, solver="scipy")[1]
-            #out1 = (out_cvxpy, out_cvxopt, out_ipopt, out_scipy); [out.pop('samples') for out in out1 if out is not None]
+            from time import time
+            K = 7; eps = np.sqrt(vals)/1000; budget = max(costs)*10**4
+            OUT = [[],[]]
 
             out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
-            out_cvxopt = problem.setup_solver(K=K, eps=eps, solver="cvxopt", optimization_solver_params={'feastol':5.e-6})[1]
-            out_cvxpy  = problem.setup_solver(K=K, eps=eps, solver="cvxpy", optimization_solver_params={'feastol':5.e-6})[1]
-            #out_ipopt  = problem.setup_solver(K=K, eps=eps, solver="ipopt")[1]
-            #out_scipy  = problem.setup_solver(K=K, eps=eps, solver="scipy")[1]
-            out2 = (out_cvxpy, out_cvxopt, out_ipopt, out_scipy); [out.pop('samples') for out in out2 if out is not None]
-            
-            print(out1, "\n", out2)
+            for i in range(2):
+                for solver in ["cvxopt", "ipopt"]:
+                    tic = time()
+                    if i == 0: out = problem.setup_solver(K=K, budget=budget, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-7, 'abstol':1e-6, 'reltol':1e-3})[1]
+                    else:      out = problem.setup_solver(K=K, eps=eps, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-7, 'abstol':1e-6, 'reltol':1e-3})[1]
+                    toc = time() - tic
+                    out = np.array([max(out['errors']), out['total_cost'], toc])
+                    OUT[i].append(out)
+
+                OUT[i] = np.vstack(OUT[i])
+
+            for i in range(2):
+                if i == 0: print("Budget: ", budget, "\n")
+                else:      print("Tolerance: ", max(eps), "\n")
+                print("\terrors\t   total cost\t   time\n")
+                print(OUT[i], "\n")
 
             sys.exit(0)
 
