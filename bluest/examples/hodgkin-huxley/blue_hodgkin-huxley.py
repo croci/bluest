@@ -372,7 +372,7 @@ class BLUENeuronProblem(BLUEProblem):
             l = ls[i]
             problem_n = l%Np
             model_to_run = ['HH', 'FN'][(l//Np)%2]
-            pde = bool((l//Np) >= 2)
+            pde = bool((l//Np) < 2)
             if pde: outputs = neuron_problems[problem_n].solve(model_to_run, params=tuple(samples[i]))
             else:   outputs = neuron_problems[problem_n].solve_ODE(model_to_run, params=tuple(samples[i]))
 
