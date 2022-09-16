@@ -1,6 +1,8 @@
 from numpy import array
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
+from matplotlib.legend_handler import HandlerTuple
 import subprocess
 import os
 import sys
@@ -18,9 +20,9 @@ for s in screens:
     w = float(s[0].replace("mm", "")); h = float(s[2].replace("mm", "")); d = ((w**2)+(h**2))**(0.5)
     sizes.append([2*round(n/25.4, r) for n in [w, h, d]])
 
-gnfntsz = 40
-fntsz = 35
-ttlfntsz = 40
+gnfntsz = 35
+fntsz = 28
+ttlfntsz = 30
 
 plt.rc('text', usetex=True)
 plt.rc('text.latex', preamble=r'\usepackage{amsfonts}\usepackage{amsmath}\usepackage{bm}\usepackage{relsize}\DeclareMathOperator{\EPS}{\mathlarger{\mathlarger{\mathlarger{\varepsilon}}}}')
@@ -36,6 +38,20 @@ def newfig(fign,small=False):
     return fig
 
 ###################################### LOAD DATA FILES ########################################
+
+# 0:  (64, f, f). cost = 22.60032949
+# 1:  (64, f, c). cost = 15.75815486
+# 2:  (64, c, f). cost = 17.81515651
+# 3:  (64, c, c). cost = 10.95222405
+# 4:  (32, f, f). cost = 6.09950577
+# 5:  (32, f, c). cost = 4.2777594
+# 6:  (32, c, f). cost = 4.75914333
+# 7:  (32, c, c). cost = 2.94629325
+# 8:  (16, f, f). cost = 1.70378913
+# 9:  (16, f, c). cost = 1.29555189
+# 10: (16, c, f). cost = 1.40823723
+# 11: (16, c, c). cost = 1
+
 
 costs = np.array([22.60032949, 15.75815486, 17.81515651 ,10.95222405 , 6.09950577 , 4.27775947 ,4.75914333 , 2.94629325 , 1.70378913 , 1.29555189,  1.40823723,1.])
 
@@ -93,7 +109,7 @@ def get_samples(method_models,sample_vals):
             out_samples[model] += sample_vals[i]
 
     out_samples[1:] = costs*out_samples[:-1]
-    out_samples[0] = (sum(costs*out_samples[1:]))/5
+    out_samples[0] = (sum(out_samples[1:]))/5
     return out_samples
 
 all_models = np.arange(-1,12); all_models[0] = -2
@@ -102,6 +118,188 @@ sample_vals = BLUE_data["samples"]; sample_vals = sample_vals[sample_vals > 0]
 blue_samples = get_samples(BLUE_models, sample_vals)
 mlmc_samples = get_samples(mlmc_models, mlmc_data["samples"])
 mfmc_samples = get_samples(mfmc_models, mfmc_data["samples"])
+
+######################### FIRST PLOT ####################################
+#
+#fig = newfig(0)
+#ax = fig.gca()
+#colors = ["steelblue", "tab:red", "tab:green", "tab:orange", "tab:cyan", "tab:brown", "gold", "slategrey"]
+#blues = ['steelblue', 'deepskyblue', 'skyblue']
+#reds = ['indianred', 'salmon', 'lightsalmon']
+#greens = ['forestgreen','limegreen','lightgreen']
+#hatches = ['xxxx', "\\\\\\\\", "////", "", 'xxx', "\\\\\\", "///", "", 'xx', "\\\\", "//", ""]
+#width = 0.8/1.2
+#
+#which_blue_models = np.argwhere(blue_samples[1:]>0).flatten()
+#reduced_blue_samples = blue_samples[1:][which_blue_models]
+#bottom = 0
+#for i in range(len(reduced_blue_samples)):
+#    ax.barh('MLBLUE', reduced_blue_samples[i], left=bottom, height=width, hatch=hatches[which_blue_models[i]], log=False, color=blues[which_blue_models[i]//4], edgecolor='black')
+#    bottom += reduced_blue_samples[i]
+#
+#reduced_mlmc_samples = mlmc_samples[1:][mlmc_models]
+#bottom = 0
+#for i in range(len(reduced_mlmc_samples)):
+#    ax.barh('MLMC', reduced_mlmc_samples[i], left=bottom, height=width, hatch=hatches[mlmc_models[i]], log=False, color=reds[mlmc_models[i]//4], edgecolor='black')
+#    bottom += reduced_mlmc_samples[i]
+#
+#reduced_mfmc_samples = mfmc_samples[1:][mfmc_models]
+#bottom = 0
+#for i in range(len(reduced_mfmc_samples)):
+#    ax.barh('MFMC', reduced_mfmc_samples[i], left=bottom, height=width, hatch=hatches[mfmc_models[i]], log=False, color=greens[mfmc_models[i]//4], edgecolor='black')
+#    bottom += reduced_mfmc_samples[i]
+#
+#plt.xlabel("Sampling cost", labelpad=3)
+#plt.ticklabel_format(axis='x', style='sci', scilimits=(0,0))
+#
+#patch_list = []
+#patch_list.append([Patch(edgecolor="black", facecolor=cols[0], hatch="xxxx", label="Fine") for cols in [blues, reds, greens]])
+#patch_list.append([Patch(edgecolor="black", facecolor=cols[1], hatch="xxx", label="Medium") for cols in [blues, reds, greens]])
+#patch_list.append([Patch(edgecolor="black", facecolor=cols[2], hatch="xx", label="Coarse") for cols in [blues, reds, greens]])
+##patch_list.append(Patch(edgecolor="black", facecolor="white", hatch="", label="Coarsest"))
+#leg = ax.legend(handles=patch_list, labels=['Fine', 'Medium', 'Coarse'], loc=9, bbox_to_anchor=(0.25,0), title="Global refinement", ncol=2, fontsize=fntsz, title_fontsize=fntsz, handler_map = {list: HandlerTuple(None)}, handlelength=5)
+#
+#patch_list2 = []
+#patch_list2.append(Patch(edgecolor="black", facecolor="white", hatch="xx", label="Left + Right"))
+#patch_list2.append(Patch(edgecolor="black", facecolor="white", hatch="\\\\", label="Left"))
+#patch_list2.append(Patch(edgecolor="black", facecolor="white", hatch="//", label="Right"))
+#patch_list2.append(Patch(edgecolor="black", facecolor="white", hatch="", label="None"))
+#ax.legend(handles=patch_list2, loc=9, bbox_to_anchor=(0.78,0), title="Cylinder refinement", ncol=2, fontsize=fntsz, title_fontsize=fntsz)
+#ax.add_artist(leg)
+#
+#ax.xaxis.tick_top()
+#ax.xaxis.set_label_position('top')
+#
+#fig.subplots_adjust(bottom=0.22)
+#
+#fig.savefig("figure_NS_new1.pdf", format='pdf', dpi=600, bbox_inches = "tight")
+#
+######################### SECOND PLOT ####################################
+#
+#fig = newfig(1)
+#
+#ax = plt.subplot2grid((3, 4), (0, 0), colspan=3, rowspan=3)
+#
+#colors = ["steelblue", "tab:red", "tab:green", "tab:orange", "tab:cyan", "tab:brown", "gold", "slategrey"]
+#blues = ['steelblue', 'deepskyblue', 'skyblue']
+#reds = ['indianred', 'salmon', 'lightsalmon']
+#greens = ['forestgreen','limegreen','lightgreen']
+#width = 0.8/1.2
+#
+#which_blue_models = np.argwhere(blue_samples[1:]>0).flatten()
+#reduced_blue_samples = blue_samples[1:][which_blue_models]
+#very_reduced_blue_samples = np.concatenate([reduced_blue_samples[:2], [sum(reduced_blue_samples[2:])]])
+#bottom = 0
+#for i in range(len(very_reduced_blue_samples)):
+#    ax.barh('MLBLUE', very_reduced_blue_samples[i], left=bottom, height=width, log=False, color=blues[which_blue_models[i]//4], edgecolor='black')
+#    bottom += very_reduced_blue_samples[i]
+#
+#reduced_mlmc_samples = mlmc_samples[1:][mlmc_models]
+#bottom = 0
+#for i in range(len(reduced_mlmc_samples)):
+#    ax.barh('MLMC', reduced_mlmc_samples[i], left=bottom, height=width, log=False, color=reds[mlmc_models[i]//4], edgecolor='black')
+#    bottom += reduced_mlmc_samples[i]
+#
+#reduced_mfmc_samples = mfmc_samples[1:][mfmc_models]
+#bottom = 0
+#for i in range(len(reduced_mfmc_samples)):
+#    ax.barh('MFMC', reduced_mfmc_samples[i], left=bottom, height=width, log=False, color=greens[mfmc_models[i]//4], edgecolor='black')
+#    bottom += reduced_mfmc_samples[i]
+#
+#plt.xlabel("Sampling cost", labelpad=3)
+#plt.ticklabel_format(axis='x', style='sci', scilimits=(0,0))
+#
+#patch_list = []
+#patch_list.append([Patch(edgecolor="black", facecolor=cols[0], label="Fine") for cols in [blues, reds, greens]])
+#patch_list.append([Patch(edgecolor="black", facecolor=cols[1], label="Medium") for cols in [blues, reds, greens]])
+#patch_list.append([Patch(edgecolor="black", facecolor=cols[2], label="Coarse") for cols in [blues, reds, greens]])
+#leg = ax.legend(handles=patch_list, labels=['Fine', 'Medium', 'Coarse'], loc=9, bbox_to_anchor=(0.5,0), title="Global refinement", ncol=4, fontsize=fntsz, title_fontsize=fntsz, handler_map = {list: HandlerTuple(None)}, handlelength=4)
+#
+#ax.xaxis.tick_top()
+#ax.xaxis.set_label_position('top')
+#
+#fig.subplots_adjust(bottom=0.22)
+#
+#colors = ['tab:orange', 'pink', 'gold', 'mediumaquamarine']
+#labels = ['Right + Left', 'Left', 'Right', 'None']
+#sizes_blue = reduced_blue_samples[2:]/sum(reduced_blue_samples[2:])*100
+#
+#for i in range(2):
+#    ax = plt.subplot2grid((3, 4), (i, 3), colspan=1, rowspan=1)
+#    ax.set_aspect('equal')
+#    ax.pie([100], autopct='', startangle=90, textprops={'fontsize': fntsz}, colors=colors[1:])
+#    if i == 0:
+#        ax.set_title('Usage of local\nrefinement models', fontsize=ttlfntsz+2)
+#
+#ax = plt.subplot2grid((3, 4), (2, 3), colspan=1, rowspan=1)
+#ax.set_aspect('equal')
+#ax.pie(sizes_blue, autopct='', startangle=90, textprops={'fontsize': fntsz}, explode=(0,0.1,0,0), colors=colors)
+#
+#patch_list = []
+#patch_list.append(Patch(edgecolor=None, facecolor=colors[0], hatch="", label="L + R"))
+#patch_list.append(Patch(edgecolor=None, facecolor=colors[1], hatch="", label="Left"))
+#patch_list.append(Patch(edgecolor=None, facecolor=colors[2], hatch="", label="Right"))
+#patch_list.append(Patch(edgecolor=None, facecolor=colors[3], hatch="", label="None"))
+#ax.legend(handles=patch_list, loc=9, bbox_to_anchor=(0.45,0), title="Cylinder refinement", ncol=2, fontsize=fntsz, title_fontsize=fntsz)
+#
+#plt.subplots_adjust(left=0.11, bottom=0.2, right=0.9, top=0.89, wspace=0.5, hspace=0.2)
+#
+#fig.savefig("figure_NS_new2.pdf", format='pdf', dpi=600, bbox_inches = "tight")
+#
+################################### FIGURE 2 #################################
+
+fig = newfig(2)
+ax = fig.gca()
+colors = ["tab:red", "skyblue", "limegreen", "tab:orange", "tab:cyan", "tab:brown", "gold", "slategrey"]
+colors = ["#3182bd", "#9ecae1", "#deebf7"]
+blues = ['steelblue', 'deepskyblue', 'skyblue']
+reds = ['indianred', 'salmon', 'lightsalmon']
+greens = ['forestgreen','limegreen','lightgreen']
+hatches = ['xxx', "\\\\\\", "///", "", 'xxx', "\\\\\\", "///", "", 'xxx', "\\\\\\", "///", ""]
+width = 0.8/1.2
+
+which_blue_models = np.argwhere(blue_samples[1:]>0).flatten()
+reduced_blue_samples = blue_samples[1:][which_blue_models]
+bottom = 0
+for i in range(len(reduced_blue_samples)):
+    ax.barh('MLBLUE', reduced_blue_samples[i], left=bottom, height=width, hatch=hatches[which_blue_models[i]], log=False, color=colors[which_blue_models[i]//4], edgecolor='black')
+    bottom += reduced_blue_samples[i]
+
+reduced_mlmc_samples = mlmc_samples[1:][mlmc_models]
+bottom = 0
+for i in range(len(reduced_mlmc_samples)):
+    ax.barh('MLMC', reduced_mlmc_samples[i], left=bottom, height=width, hatch=hatches[mlmc_models[i]], log=False, color=colors[mlmc_models[i]//4], edgecolor='black')
+    bottom += reduced_mlmc_samples[i]
+
+reduced_mfmc_samples = mfmc_samples[1:][mfmc_models]
+bottom = 0
+for i in range(len(reduced_mfmc_samples)):
+    ax.barh('MFMC', reduced_mfmc_samples[i], left=bottom, height=width, hatch=hatches[mfmc_models[i]], log=False, color=colors[mfmc_models[i]//4], edgecolor='black')
+    bottom += reduced_mfmc_samples[i]
+
+plt.xlabel("Sampling cost", labelpad=3)
+plt.ticklabel_format(axis='x', style='sci', scilimits=(0,0))
+
+patch_list = []
+patch_list.append(Patch(edgecolor="black", facecolor=colors[0], hatch="", label="Fine mesh"))
+patch_list.append(Patch(edgecolor="black", facecolor=colors[1], hatch="", label="Medium mesh"))
+patch_list.append(Patch(edgecolor="black", facecolor=colors[2], hatch="", label="Coarse mesh"))
+patch_list.append(Patch(edgecolor="black", facecolor="white", hatch="xx", label="LR: Left \& Right"))
+patch_list.append(Patch(edgecolor="black", facecolor="white", hatch="\\\\", label="LR: Left"))
+patch_list.append(Patch(edgecolor="black", facecolor="white", hatch="//", label="LR: Right"))
+patch_list.append(Patch(edgecolor="black", facecolor="white", hatch="", label="LR: None"))
+leg = ax.legend(handles=patch_list, loc=9, bbox_to_anchor=(0.5,0), ncol=3,  title="Global mesh size and local refinement (LR) around cylinders", fontsize=fntsz, title_fontsize=fntsz, handler_map = {list: HandlerTuple(None)})
+
+ax.xaxis.tick_top()
+ax.xaxis.set_label_position('top')
+
+fig.subplots_adjust(bottom=0.26)
+
+fig.savefig("figure_NS_new3.pdf", format='pdf', dpi=600, bbox_inches = "tight")
+
+plt.show()
+
+import sys; sys.exit(0)
 
 fig = newfig(0)
 colors = ["steelblue", "tab:red", "tab:green", "tab:orange", "tab:cyan", "tab:brown", "gold", "slategrey"]

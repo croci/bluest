@@ -744,7 +744,7 @@ class BLUEProblem(object):
 
         alphas = [mfmc_data["alphas"] for mfmc_data in best_data]
         mfmc_data = {"samples" : samples, "errors" : errs, "total_cost" : cost, "alphas" : alphas}
-        if self.verbose: print("Best MFMC estimator found. Coupled models:", best_group, " Max error: ", errs, " Cost: ", cost, "\n")
+        if self.verbose: print("Best MFMC estimator found. Coupled models:", best_group, " Max error: ", max(errs), " Cost: ", cost, "\n")
         return best_group, mfmc_data
 
     def solve_mfmc(self, budget=None, eps=None):

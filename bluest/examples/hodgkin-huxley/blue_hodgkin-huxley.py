@@ -372,7 +372,7 @@ class BLUENeuronProblem(BLUEProblem):
             l = ls[i]
             problem_n = l%Np
             model_to_run = ['HH', 'FN'][(l//Np)%2]
-            pde = bool((l//Np) < 2)
+            pde = bool((l//Np) >= 2)
             if pde: outputs = neuron_problems[problem_n].solve(model_to_run, params=tuple(samples[i]))
             else:   outputs = neuron_problems[problem_n].solve_ODE(model_to_run, params=tuple(samples[i]))
 
@@ -413,9 +413,9 @@ if __name__ == '__main__':
         C = problem.get_covariances()
 
         vals = np.array([c[0,0] for c in C])
-        eps = np.sqrt(vals)/100; budget = None
+        eps = np.sqrt(vals)/1000; budget = None
 
-        solver_test = True
+        solver_test = False
         if solver_test:
             from time import time
             K = 7; eps = np.sqrt(vals)/1000; budget = max(costs)*10**4
@@ -441,9 +441,9 @@ if __name__ == '__main__':
 
             sys.exit(0)
 
-        out_BLUE = problem.setup_solver(K=5, budget=budget, eps=eps)
+        out_BLUE = problem.setup_solver(K=7, budget=budget, eps=eps)
         out_MLMC = problem.setup_mlmc(eps=eps, budget=budget)
         out_MFMC = problem.setup_mfmc(eps=eps, budget=budget)
 
         print("\n\n\n", out_BLUE, "\n\n", out_MLMC, "\n\n", out_MFMC)
-        np.savez("samples.npz",samples=out_BLUE["samples"])
+        np.savez("samples.npz",samples=out_BLUE[1]["samples"])

@@ -113,6 +113,7 @@ if __name__ == "__main__":
     solver_test = True
     if solver_test:
         from time import time
+        #FIXME: this eps is not correct isn't it? It should be on the variance
         K = 4; eps = 0.01*abs(mus)/100; budget = max(costs)*100
         OUT = [[],[]]
 
