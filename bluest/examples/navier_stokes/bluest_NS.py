@@ -93,8 +93,8 @@ if __name__ == "__main__":
 
     if mode == "part1":   mus = mus[:3]
     elif mode == "part2": mus = mus[3:]
-    costs = np.array([model["W"].dim() for model in model_data]); costs = costs/min(costs)
-    if verbose: print("Model pseudo-costs: ", costs)
+    costs = np.array([model["W"].dim()**2 for model in model_data]); costs = costs/min(costs)
+    if verbose: print("Model pseudo-costs: ", list(costs))
 
     #problem = NavierStokesProblem(M, n_outputs=No, costs=costs, covariance_estimation_samples=max(mpiSize*50,50))
     #problem.save_graph_data("NS_model_data_full.npz")
@@ -110,7 +110,7 @@ if __name__ == "__main__":
 
     eps = 0.01*abs(mus); budget=None
 
-    solver_test = True
+    solver_test = False
     if solver_test:
         from time import time
         #FIXME: this eps is not correct isn't it? It should be on the variance
@@ -135,11 +135,13 @@ if __name__ == "__main__":
 
         sys.exit(0)
 
-    out_BLUE = problem.setup_solver(K=3, budget=budget, eps=eps)
+    out_BLUE = problem.setup_solver(K=7, budget=budget, eps=eps)
     out_MLMC = problem.setup_mlmc(budget=budget, eps=eps)
     out_MFMC = problem.setup_mfmc(budget=budget, eps=eps)
 
     print("\n\n\n", out_BLUE, "\n\n", out_MLMC, "\n\n", out_MFMC)
+    print("\n\n\n", out_BLUE[1]["total_cost"], "\n", out_MLMC[1]["total_cost"], "\n", out_MFMC[1]["total_cost"])
+    np.savez("samples.npz",samples=out_BLUE[1]["samples"])
 
     #out = problem.solve()
     #if verbose: print(out)

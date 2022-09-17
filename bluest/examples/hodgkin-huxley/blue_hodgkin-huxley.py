@@ -336,15 +336,16 @@ class NeuronProblem(object):
 
 no_Na_curr = False
 
-mesh_sizes = [16,   32,    64][::-1]
-timesteps  = [0.025, 0.0125, 0.00625][::-1]
+#mesh_sizes = [16,   32,    64][::-1]
+#timesteps  = [0.025, 0.0125, 0.00625][::-1]
+mesh_sizes = [8,   32,    128][::-1]
+timesteps  = [0.05, 0.0125, 0.003125][::-1]
 neuron_problems = [NeuronProblem(N, dt, T=20) for N,dt in zip(mesh_sizes,timesteps)]
 
 Np = len(neuron_problems)
 M = 4*Np
 No = 5 - int(no_Na_curr)
 
-#costs = np.array([problem.M*problem.W.dim()**3 for problem in neuron_problems] + [problem.M*problem.Wfn.dim()**3 for problem in neuron_problems] + [4*problem.M for problem in neuron_problems] + [2*problem.M for problem in neuron_problems]); costs = costs/np.mean(costs)
 #NOTE: estimated from dofs. Constant in front estimated via CPU timings
 costs = np.array([8*problem.M*problem.W.dim() for problem in neuron_problems] + [8*problem.M*problem.Wfn.dim() for problem in neuron_problems] + [4*problem.M for problem in neuron_problems] + [2*problem.M for problem in neuron_problems]); costs = costs/np.mean(costs)
 
@@ -443,9 +444,10 @@ if __name__ == '__main__':
 
             sys.exit(0)
 
-        out_BLUE = problem.setup_solver(K=3, budget=budget, eps=eps)
+        out_BLUE = problem.setup_solver(K=7, budget=budget, eps=eps)
         out_MLMC = problem.setup_mlmc(eps=eps, budget=budget)
         out_MFMC = problem.setup_mfmc(eps=eps, budget=budget)
 
         print("\n\n\n", out_BLUE, "\n\n", out_MLMC, "\n\n", out_MFMC)
-        #if not no_Na_curr: np.savez("samples.npz",samples=out_BLUE[1]["samples"])
+        print("\n\n\n", out_BLUE[1]["total_cost"], "\n", out_MLMC[1]["total_cost"], "\n", out_MFMC[1]["total_cost"])
+        if not no_Na_curr: np.savez("samples.npz",samples=out_BLUE[1]["samples"])
