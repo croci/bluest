@@ -8,10 +8,10 @@ from .misc import attempt_mlmc_setup,attempt_mfmc_setup
 from .layered_network_graph import LayeredNetworkGraph
 from .spg import spg
 
-spg_default_params = {"maxit" : 500,
-                      "maxfc" : 500**2,
+spg_default_params = {"maxit" : 10000,
+                      "maxfc" : 10000**2,
                       "verbose" : False,
-                      "eps"     : 1.0e-4,
+                      "eps"     : 1.0e-10,
                       "lmbda_min" : 10.**-30,
                       "lmbda_max" : 10.**30,
                       "linesearch_history_length" : 10,
@@ -366,11 +366,11 @@ class BLUEProblem(object):
                         C_hat[n][i,j] = np.inf # mark as uncorrelated
                     self.G[n][i][j]['weight'] = C_hat[n][i,j]
 
-    def project_covariances(self):
+    def project_covariances(self, bypass_error_check=False):
         for n in range(self.n_outputs):
-            self.project_covariance(n)
+            self.project_covariance(n, bypass_error_check=bypass_error_check)
 
-    def project_covariance(self, n=0):
+    def project_covariance(self, n=0, bypass_error_check=False):
 
         spg_params = self.params["spg_params"]
 
@@ -383,7 +383,7 @@ class BLUEProblem(object):
         gamma = 0.0
 
         # projection onto SPD matrices
-        def proj(X, eps=1e-10):
+        def proj(X, eps=5e-14):
             l = int(np.sqrt(len(X)).round())
             X = X.reshape((l,l))
             l,V = np.linalg.eigh((X + X.T)/2)
@@ -408,6 +408,12 @@ class BLUEProblem(object):
 
             if res["spginfo"] == 0:
                 if self.verbose: print("Covariance projected, projection error: ", res["f"])
+                if res["f"] > 1.0e-10 and self.verbose and not bypass_error_check:
+                    print("\n\n++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
+                    print("\nWARNING! Large covariance projection error. Model covariance may be singular. Consider removing one model.")
+                    print("Leaving covariances as they are. To bypass: run problem.project_variances(bypass_error_check=True) before setting up UQ solver.\n")
+                    print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n\n")
+                    return res["f"]
             else:
                 raise RuntimeError("Could not find good enough Covariance projection. Solver info:\n%s" % res)
 
@@ -431,6 +437,8 @@ class BLUEProblem(object):
                 elif coupled:
                     self.G[n].add_edge(i,j)
                     self.G[n][i][j]['weight'] = C_new[i,j]
+
+        return res["f"]
 
     def estimate_costs(self, N=1):
         if self.verbose: print("Cost estimation via sampling...")
