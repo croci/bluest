@@ -345,10 +345,10 @@ class BLUEProblem(object):
     #################### COVARIANCE AND COST ESTIMATORS #######################
 
     def estimate_missing_covariances(self, N):
-        if self.verbose: print("Covariance estimation with %d samples..." % N)
         C = [nx.adjacency_matrix(self.G[n]).toarray() for n in range(self.n_outputs)]
         ls = list(np.where(np.isnan(np.sum(sum(C),1)))[0])
         if len(ls) == 0: return
+        if self.verbose: print("Covariance estimation with %d samples..." % N)
         sumse,sumsc,cost,sumsd1,sumsd2 = self.blue_fn(ls, N, compute_mlmc_differences=True)
         inners = self.get_models_inner_products()
         C_hat = [sumsc[n]/N - self.outer(sumse[n],sumse[n],inners[n])/N**2 for n in range(self.n_outputs)]
@@ -372,6 +372,8 @@ class BLUEProblem(object):
 
     def project_covariance(self, n=0, bypass_error_check=False):
 
+        spd_eps = 5e-14
+
         spg_params = self.params["spg_params"]
 
         # the covariance will have NaNs corresponding to entries that cannot be coupled
@@ -383,11 +385,11 @@ class BLUEProblem(object):
         gamma = 0.0
 
         # projection onto SPD matrices
-        def proj(X, eps=5e-14):
-            l = int(np.sqrt(len(X)).round())
-            X = X.reshape((l,l))
+        def proj(X, eps=spd_eps):
+            L = int(np.sqrt(len(X)).round())
+            X = X.reshape((L,L))
             l,V = np.linalg.eigh((X + X.T)/2)
-            l[l<eps] = eps
+            l[l < eps] = eps
             return (V@np.diag(l)@V.T).flatten()
 
         def am(C,mask):
@@ -401,27 +403,37 @@ class BLUEProblem(object):
         def evalg(x):
             return am(x - C, mask**2) + gamma*am(x, invmask**2)
 
-        x = proj(am(C,abs(mask) > 1.0e-14))
-        if self.verbose: print("Running Spectral Gradient Descent for Covariance projection...")
         if self.mpiRank == 0:
-            res = spg(evalf, evalg, proj, x, eps=spg_params["eps"], maxit=spg_params["maxit"], maxfc=spg_params["maxfc"], iprint=spg_params["verbose"] and self.warning, lmbda_min=spg_params["lmbda_min"], lmbda_max=spg_params["lmbda_max"], M=spg_params["linesearch_history_length"])
-
-            if res["spginfo"] == 0:
-                if self.verbose: print("Covariance projected, projection error: ", res["f"])
-                if res["f"] > 1.0e-10 and self.verbose and not bypass_error_check:
-                    print("\n\n++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
-                    print("\nWARNING! Large covariance projection error. Model covariance may be singular. Consider removing one model.")
-                    print("Leaving covariances as they are. To bypass: run problem.project_variances(bypass_error_check=True) before setting up UQ solver.\n")
-                    print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n\n")
-                    return res["f"]
+            if np.isfinite(C).all():
+                L = int(np.sqrt(len(C)).round())
+                C = C.reshape((L,L))
+                l,V = np.linalg.eigh(C)
+                l[l < spd_eps] = spd_eps
+                C_new = V@np.diag(l)@V.T
+                err = np.linalg.norm(C-C_new, 'fro')
+                if self.verbose: print("Covariance projected to be symmetric positive definite, projection error: ", err)
             else:
-                raise RuntimeError("Could not find good enough Covariance projection. Solver info:\n%s" % res)
+                if self.verbose: print("Running Spectral Gradient Descent for Covariance projection...")
+                x = proj(am(C,abs(mask) > 1.0e-14))
+                res = spg(evalf, evalg, proj, x, eps=spg_params["eps"], maxit=spg_params["maxit"], maxfc=spg_params["maxfc"], iprint=spg_params["verbose"] and self.warning, lmbda_min=spg_params["lmbda_min"], lmbda_max=spg_params["lmbda_max"], M=spg_params["linesearch_history_length"])
+                err = res["f"]
 
-            C_new = res["x"].reshape((self.M, self.M))
-            s = np.sqrt(np.diag(C_new))
-            rho_new = C_new/np.outer(s,s)
-            C_new[abs(rho_new) < 1.0e-7] = np.inf # mark uncorrelated models
-            C_new[np.isnan(C).reshape((self.M, self.M))] = np.nan # keep uncoupled models uncoupled
+                if res["spginfo"] == 0:
+                    if self.verbose: print("Covariance projected, projection error: ", err)
+                    if err > 1.0e-10 and self.verbose and not bypass_error_check:
+                        print("\n\n++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
+                        print("\nWARNING! Large covariance projection error. Model covariance may be singular. Consider removing one model.")
+                        print("Leaving covariances as they are. To bypass: run problem.project_variances(bypass_error_check=True) before setting up UQ solver.\n")
+                        print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n\n")
+                        return err
+                else:
+                    raise RuntimeError("Could not find good enough Covariance projection. Solver info:\n%s" % res)
+
+                C_new = res["x"].reshape((self.M, self.M))
+                s = np.sqrt(np.diag(C_new))
+                rho_new = C_new/np.outer(s,s)
+                C_new[abs(rho_new) < 1.0e-7] = np.inf # mark uncorrelated models
+                C_new[np.isnan(C).reshape((self.M, self.M))] = np.nan # keep uncoupled models uncoupled
 
         else:
             C_new = None
@@ -438,7 +450,7 @@ class BLUEProblem(object):
                     self.G[n].add_edge(i,j)
                     self.G[n][i][j]['weight'] = C_new[i,j]
 
-        return res["f"]
+        return err
 
     def estimate_costs(self, N=1):
         if self.verbose: print("Cost estimation via sampling...")
