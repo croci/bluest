@@ -437,8 +437,10 @@ class BLUEProblem(object):
 
         else:
             C_new = None
+            err = None
 
         C_new = COMM_WORLD.bcast(C_new, root=0)
+        err   = COMM_WORLD.bcast(err, root=0)
 
         for i in range(self.M):
             for j in range(self.M):
