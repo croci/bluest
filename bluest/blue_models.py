@@ -851,7 +851,7 @@ class BLUEProblem(object):
             eps = None
         if eps is not None and isinstance(eps,(int,float,np.int,np.float)): eps = [eps for n in range(self.n_outputs)]
 
-        if self.verbose: print("Running variance test...")
+        if self.verbose: print("Running variance test...", flush=True)
 
         self.setup_solver(K=K, budget=budget, eps=eps, solver="cvxpy")
         err_ex = np.sqrt(self.MOSAP_output['variances'])
@@ -862,7 +862,7 @@ class BLUEProblem(object):
         s1 = [0 for n in range(self.n_outputs)]
         s2 = np.zeros_like(err_ex)
         for it in range(1,N+1):
-            if self.verbose: print("Sampling estimator %d/%d" % (it,N))
+            if self.verbose: print("Sampling estimator %d/%d" % (it,N), flush=True)
             mus,_,_ = self.solve(verbose=False)
             for n in range(self.n_outputs):
                 s1[n] += mus[n]
@@ -873,8 +873,8 @@ class BLUEProblem(object):
             s2[n] /= N
             err[n] = np.sqrt(s2[n] - s1[n])
 
-        if self.verbose: print("Theoretical error: ", err_ex)
-        if self.verbose: print("Estimated error:   ", err)
+        if self.verbose: print("Theoretical error: ", err_ex, flush=True)
+        if self.verbose: print("Estimated error:   ", err, flush=True)
 
         return err_ex, err
 

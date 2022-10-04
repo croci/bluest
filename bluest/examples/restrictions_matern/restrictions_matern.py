@@ -6,6 +6,7 @@ import math
 import sys
 import os
 from io import StringIO
+from single_matern_field import MaternField,make_nested_mapping
 
 set_log_level(30)
 
@@ -21,9 +22,26 @@ buf = 1
 n_levels  = 7
 No = 1
 
+outer_meshes = [RectangleMesh(MPI.comm_self, Point(0,0), Point(1,1), 2**(l+1), 2**(l+1)) for l in range(buf, n_levels+buf)][::-1]
 meshes = [RectangleMesh(MPI.comm_self, Point(0,0), Point(1,1), 2**l, 2**l) for l in range(buf, n_levels+buf)][::-1]
 
+outer_function_spaces = [FunctionSpace(mesh, 'CG', 1) for mesh in outer_meshes]
 function_spaces = [FunctionSpace(mesh, 'CG', 1) for mesh in meshes]
+
+k = 1
+parameters = {"lmbda"    : 0.2, # correlation length 
+              "avg"      : 1.0, # mean
+              "sigma"    : 0.3, # standard dev.
+              "lognormal_scaling" : True,
+              "nu"       : 2*k-dim/2} # smoothness parameter
+
+materns = [MaternField(outer_V, inner_V, parameters) for outer_V,inner_V in zip(outer_function_spaces,function_spaces)]
+
+nested_mappings = [[0 for j in range(n_levels)] for i in range(n_levels)]
+for i in range(n_levels):
+    for j in range(i+1,n_levels):
+        nested_mappings[i][j] = make_nested_mapping(function_spaces[i], function_spaces[j])
+
 
 def get_bcs(V, sample):
     _,b,c,d = sample # a = 0
@@ -40,7 +58,7 @@ def compute_solution(V, sample):
 
     sol = Function(V)
 
-    D = Constant(exp(sample[0]))
+    D = exp(sample[0])
     f = Expression('exp(-(pow(x[0]-0.5,2)+pow(x[1]-0.5,2)))', degree=4, mpi_comm=MPI.comm_self)
 
     lhs = inner(D*grad(u), grad(v))*dx + u*v*dx
@@ -55,8 +73,18 @@ def compute_solution(V, sample):
 class PoissonProblem(BLUEProblem):
     def sampler(self, ls, N=1):
         L = len(ls)
-        sample = RNG.randn(4)/4
-        return [sample.copy() for i in range(L)]
+        lmin = min(ls)
+        sample_gauss = RNG.randn(3)/4
+        sample = materns[lmin].sample()
+        samples = []
+        for i in range(L):
+            if ls[i] == lmin: samples.append([sample] + list(sample_gauss.copy()))
+            else:
+                ss = Function(function_spaces[ls[i]])
+                ss.vector()[:] = sample.vector()[nested_mappings[lmin][ls[i]]]
+                samples.append([ss] + list(sample_gauss.copy()))
+
+        return samples
 
     def evaluate(self, ls, samples, N=1):
 
@@ -108,16 +136,16 @@ def build_test_covariance(string="full"):
     return C
 
 ndofs = np.array([V.dim() for V in function_spaces])
-costs = np.concatenate([ndofs, [1]])
+costs = np.concatenate([ndofs]); costs = costs/min(costs);
 
 #C = [build_test_covariance("--O") for n in range(No)]
 C = None
-load_model_graph = os.path.exists("./restrictions_model_data.npz")
+load_model_graph = os.path.exists("./restrictions_matern_model_data.npz")
 if load_model_graph:
-    problem = PoissonProblem(M, n_outputs=No, costs=costs, datafile="restrictions_model_data.npz")
+    problem = PoissonProblem(M, n_outputs=No, costs=costs, datafile="restrictions_matern_model_data.npz")
 else:
-    problem = PoissonProblem(M, n_outputs=No, C=C, costs=costs, skip_projection=True, covariance_estimation_samples=1000)
-    problem.save_graph_data("restrictions_model_data.npz")
+    problem = PoissonProblem(M, n_outputs=No, C=C, costs=costs, covariance_estimation_samples=1000)
+    problem.save_graph_data("restrictions_matern_model_data.npz")
 
 C = problem.get_covariance()
 true_C = C.copy()
@@ -127,7 +155,7 @@ d = np.diag(C)
 delv = problem.get_mlmc_variance()[0,1:]
 covest_ex = (d[:-1] + d[1:] - delv)/2
 
-vals = np.array(problem.evaluate(list(range(M)), [np.zeros(4) for i in range(M)])[0])
+vals = np.array(problem.evaluate(list(range(M)), problem.sampler(list(range(M))))[0])
 valdiff = abs(vals[:-1]-vals[1:])
 m = 2*np.polyfit(np.log2(ndofs[2:][:3]), np.log2(valdiff[2:][:3]), 1)[0]
 
@@ -160,12 +188,31 @@ dV_est[2:,0] = np.nan
 dV_est[1,3:] = np.nan
 dV_est[3:,1] = np.nan
 
-eps = 5.e-2
+eps = 1.e-3*np.sqrt(C[0,0])
+
+# First with no restrictions
+out_BLUE = problem.setup_solver(K=4, eps=eps, continuous_relaxation=False)
+out_MLMC = problem.setup_mlmc(eps=eps)
+out_MFMC = problem.setup_mfmc(eps=eps)
+printout = StringIO()
+if verbose: print("\n\n\n", "Exact, no restrictions:\n", "BLUE: ", int(out_BLUE[1]["total_cost"]), "\n MLMC: ", int(out_MLMC[1]["total_cost"]), "\n MFMC: ", int(out_MFMC[1]["total_cost"])," ", file=printout)
+
+problem = PoissonProblem(M, C=C_est, mlmc_variances=[dV_est], costs=costs)
+
+# Then with restrictions and estimation
+out_BLUE = problem.setup_solver(K=4, eps=eps, continuous_relaxation=False)
+out_MLMC = problem.setup_mlmc(eps=eps)
+out_MFMC = problem.setup_mfmc(eps=eps)
+printout2 = StringIO()
+if verbose: print("\n", "Estimated, with restrictions:\n", "BLUE: ", int(out_BLUE[1]["total_cost"]), "\n MLMC: ", int(out_MLMC[1]["total_cost"]), "\n MFMC: ", int(out_MFMC[1]["total_cost"]), " ", file=printout2)
+#np.savez("samples.npz", out_BLUE=out_BLUE, out_MLMC=out_MLMC, out_MFMC=out_MFMC, costs=costs)
+
+if verbose: print("\n\n", out_BLUE, "\n\n", out_MLMC, "\n\n", out_MFMC, "\n\n", flush=True)
 
 solver_test = False
 if solver_test:
     from time import time
-    K = 3; eps = 1.e-2; budget = 1e5
+    K = 3; eps = 1.e-2*np.sqrt(C[0,0]); budget = 1e5
     OUT = [[],[]]
 
     out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
@@ -186,21 +233,6 @@ if solver_test:
 
     import sys; sys.exit(0)
 
-# First with no restrictions
-out_BLUE = problem.setup_solver(K=3, eps=eps, continuous_relaxation=True)
-out_MLMC = problem.setup_mlmc(eps=eps)
-out_MFMC = problem.setup_mfmc(eps=eps)
-printout = StringIO()
-print("\n\n\n", "Exact, no restrictions:\n", "BLUE: ", int(out_BLUE[1]["total_cost"]), "\n MLMC: ", int(out_MLMC[1]["total_cost"]), "\n MFMC: ", int(out_MFMC[1]["total_cost"]), file=printout)
-
-problem = PoissonProblem(M, C=C_est, mlmc_variances=[dV_est], costs=costs)
-
-# Then with restrictions and estimation
-out_BLUE = problem.setup_solver(K=4, eps=eps, continuous_relaxation=True)
-out_MLMC = problem.setup_mlmc(eps=eps)
-out_MFMC = problem.setup_mfmc(eps=eps)
-printout2 = StringIO()
-print("\n", "Estimated, with restrictions:\n", "BLUE: ", int(out_BLUE[1]["total_cost"]), "\n MLMC: ", int(out_MLMC[1]["total_cost"]), "\n MFMC: ", int(out_MFMC[1]["total_cost"]), file=printout2)
 
 # Then with restrictions and no estimation
 C = true_C.copy()
@@ -215,14 +247,15 @@ dV[1,3:] = np.nan
 dV[3:,1] = np.nan
 
 problem = PoissonProblem(M, C=C, mlmc_variances=[dV], costs=costs)
-out_BLUE = problem.setup_solver(K=4, eps=eps, continuous_relaxation=True)
+out_BLUE = problem.setup_solver(K=4, eps=eps, continuous_relaxation=False)
 out_MLMC = problem.setup_mlmc(eps=eps)
 out_MFMC = problem.setup_mfmc(eps=eps)
 
 # NOTE: printing things in the right order, be careful
-print(printout.getvalue()[:-2])
-print("\n", "Exact, with restrictions:\n", "BLUE: ", int(out_BLUE[1]["total_cost"]), "\n MLMC: ", int(out_MLMC[1]["total_cost"]), "\n MFMC: ", int(out_MFMC[1]["total_cost"]))
-print(printout2.getvalue()[:-2])
+if verbose:
+    print(printout.getvalue()[:-2])
+    print("\n", "Exact, with restrictions:\n", "BLUE: ", int(out_BLUE[1]["total_cost"]), "\n MLMC: ", int(out_MLMC[1]["total_cost"]), "\n MFMC: ", int(out_MFMC[1]["total_cost"]))
+    print(printout2.getvalue()[:-2])
 
 C_hat = problem.get_covariance(); C_hat[np.isnan(C_hat)] = 0
 C[~np.isfinite(C)] = 0
