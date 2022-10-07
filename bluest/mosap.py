@@ -37,7 +37,15 @@ class MOSAP(object):
         self.sizes = [0] + [len(groupsk) for groupsk in groups]
         self.cumsizes = np.cumsum(self.sizes)
         self.L = self.cumsizes[-1]
-        self.e = np.array([int(0 in group) for groupsk in groups for group in groupsk])
+
+        #self.e = np.array([int(0 in group) for groupsk in groups for group in groupsk])
+        ES = [[] for i in range(self.N)]
+        for groupsk in groups:
+            for group in groupsk:
+                for i in range(self.N):
+                    ES[i].append(int(i in group))
+        self.ES = [np.array(es) for es in ES]
+        self.e = self.ES[0]
 
         mappings = [[[] for k in range(Ks[n])] for n in range(self.n_outputs)]
         for n in range(self.n_outputs):
@@ -244,7 +252,7 @@ class MOSAP(object):
 
         return samples.astype(int)
 
-    def solve(self, budget=None, eps=None, solver="cvxpy", x0=None, continuous_relaxation=False, solver_params=None):
+    def solve(self, budget=None, eps=None, solver="cvxpy", x0=None, continuous_relaxation=False, max_model_samples=None, solver_params=None):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         if solver not in ["scipy", "cvxpy", "ipopt", "cvxopt"]:
@@ -253,10 +261,10 @@ class MOSAP(object):
         if eps is None: print("Minimizing statistical error for fixed cost...\n")
         else:           print("Minimizing cost given statistical error tolerance...\n")
 
-        if   solver == "cvxpy":  samples = self.cvxpy_solve(budget=budget, eps=eps, cvxpy_params=solver_params)
-        elif solver == "cvxopt": samples = self.cvxopt_solve(budget=budget, eps=eps, cvxopt_params=solver_params)
-        elif solver == "ipopt":  samples = self.ipopt_solve(budget=budget, eps=eps, x0=x0)
-        elif solver == "scipy":  samples = self.scipy_solve(budget=budget, eps=eps, x0=x0)
+        if   solver == "cvxpy":  samples = self.cvxpy_solve(budget=budget, eps=eps, max_model_samples=max_model_samples, cvxpy_params=solver_params)
+        elif solver == "cvxopt": samples = self.cvxopt_solve(budget=budget, eps=eps, max_model_samples=max_model_samples, cvxopt_params=solver_params)
+        elif solver == "ipopt":  samples = self.ipopt_solve(budget=budget, eps=eps, x0=x0, max_model_samples=max_model_samples)
+        elif solver == "scipy":  samples = self.scipy_solve(budget=budget, eps=eps, x0=x0, max_model_samples=max_model_samples)
 
         if not continuous_relaxation:
             samples = self.integer_projection(samples, budget=budget, eps=eps)
@@ -319,7 +327,7 @@ class MOSAP(object):
 
         return Gs,hs
 
-    def cvxopt_solve(self, budget=None, eps=None, delta=0.0, cvxopt_params=None):
+    def cvxopt_solve(self, budget=None, eps=None, delta=0.0, max_model_samples=None, cvxopt_params=None):
         budget, eps = self.check_input(budget, eps)
 
         No       = self.n_outputs
@@ -412,7 +420,7 @@ class MOSAP(object):
         out = [bmat >> 0 for bmat in bmats]
         return out
 
-    def cvxpy_solve(self, budget=None, eps=None, delta=0.0, cvxpy_params=None):
+    def cvxpy_solve(self, budget=None, eps=None, delta=0.0, max_model_samples=None, cvxpy_params=None):
         budget, eps = self.check_input(budget, eps)
 
         L        = self.L
@@ -457,7 +465,7 @@ class MOSAP(object):
         print(m.value.round())
         return m.value
 
-    def scipy_solve(self, budget=None, eps=None, x0=None):
+    def scipy_solve(self, budget=None, eps=None, x0=None, max_model_samples=None):
         from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds
 
         budget, eps = self.check_input(budget, eps)
@@ -506,7 +514,7 @@ class MOSAP(object):
 
         return res.x
 
-    def ipopt_solve(self, budget=None, eps=None, x0=None):
+    def ipopt_solve(self, budget=None, eps=None, x0=None, max_model_samples=None):
         from cyipopt import minimize_ipopt
 
         budget, eps = self.check_input(budget, eps)

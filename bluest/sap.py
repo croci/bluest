@@ -77,7 +77,14 @@ class SAP(object):
         self.cumsizes         = np.cumsum(sizes)
         self.L                = self.cumsizes[-1]
 
-        self.e = np.array([int(0 in group) for groupsk in groups for group in groupsk])
+        #self.e = np.array([int(0 in group) for groupsk in groups for group in groupsk])
+        ES = [[] for i in range(self.N)]
+        for groupsk in groups:
+            for group in groupsk:
+                for i in range(self.N):
+                    ES[i].append(int(i in group))
+        self.ES = [np.array(es) for es in ES]
+        self.e = self.ES[0]
 
         self.get_variance_functions()
 
@@ -161,7 +168,7 @@ class SAP(object):
 
         return samples.astype(int)
     
-    def solve(self, budget=None, eps=None, solver="cvxpy", x0=None, continuous_relaxation=False, solver_params=None):
+    def solve(self, budget=None, eps=None, solver="cvxpy", x0=None, continuous_relaxation=False, max_model_samples=None, solver_params=None):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         if solver not in ["scipy", "cvxpy", "ipopt", "cvxopt"]:
@@ -170,10 +177,10 @@ class SAP(object):
         if eps is None: print("Minimizing statistical error for fixed cost...\n")
         else:           print("Minimizing cost given statistical error tolerance...\n")
 
-        if   solver == "cvxpy":  samples = self.cvxpy_solve(budget=budget, eps=eps, cvxpy_params=solver_params)
-        elif solver == "cvxopt": samples = self.cvxopt_solve(budget=budget, eps=eps, cvxopt_params=solver_params)
-        elif solver == "scipy":  samples = self.scipy_solve(budget=budget, eps=eps, x0=x0)
-        elif solver == "ipopt":  samples = self.ipopt_solve(budget=budget, eps=eps, x0=x0)
+        if   solver == "cvxpy":  samples = self.cvxpy_solve(budget=budget, eps=eps, max_model_samples=max_model_samples, cvxpy_params=solver_params)
+        elif solver == "cvxopt": samples = self.cvxopt_solve(budget=budget, eps=eps, max_model_samples=max_model_samples, cvxopt_params=solver_params)
+        elif solver == "scipy":  samples = self.scipy_solve(budget=budget, eps=eps, x0=x0, max_model_samples=max_model_samples)
+        elif solver == "ipopt":  samples = self.ipopt_solve(budget=budget, eps=eps, x0=x0, max_model_samples=max_model_samples)
 
         if not continuous_relaxation:
             samples = self.integer_projection(samples, budget=budget, eps=eps)
@@ -185,7 +192,27 @@ class SAP(object):
 
         return samples
 
-    def cvxopt_solve(self, budget=None, eps=None, delta=0.0, cvxopt_params=None):
+    def get_max_sample_constraints(self, max_model_samples):
+        if max_model_samples is None:
+            return [],[]
+        
+        if not isinstance(max_model_samples, np.ndarray) or len(max_model_samples) != self.N:
+            raise ValueError("The maximum number of model samples must be prescribed as a numpy array of the same length as the number of models.")
+
+        if max_model_samples[0] < 1:
+            raise ValueError("The high-fidelity model must be sampled at least once.")
+
+        es  = []
+        rhs = []
+        for i in range(self.N):
+            if np.isfinite(max_model_samples[i]):
+                nmax = int(np.round(max_model_samples[i]))
+                es.append(self.ES[i])
+                rhs.append(nmax)
+
+        return es,rhs
+
+    def cvxopt_solve(self, budget=None, eps=None, delta=0.0, max_model_samples=None, cvxopt_params=None):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
 
@@ -199,16 +226,21 @@ class SAP(object):
         if cvxopt_params is not None:
             cvxopt_solver_params.update(cvxopt_params)
 
+        es,rhs = self.get_max_sample_constraints(max_model_samples)
+
         scales = 1/abs(psi).sum(axis=0).mean()
 
         if budget is not None:
             wt = np.concatenate([[0], w])
             et = np.concatenate([[0], e])
+            if len(es) > 0:
+                est = [np.concatenate([[0], -ees]) for ees in es]
+                et = np.vstack([et] + est)
 
             c = np.zeros((L+1,)); c[0] = 1.; c = matrix(c)
 
             G0 = csr_matrix(np.vstack([-np.eye(L+1),wt,-et])); G0.eliminate_zeros(); G0 = csr_to_cvxopt(G0)
-            h0 = np.concatenate([np.zeros((L+1,)), [1.], [-1./budget]]); h0 = matrix(h0)
+            h0 = np.concatenate([np.zeros((L+1,)), [1.], [-1./budget] + [item/budget for item in rhs]]); h0 = matrix(h0)
 
             # NOTE: need to add a zero row every N entries since the last column of Phi is zero. Also here need to add a column to the left corresponding to the variable t
             l = list(find(psi)); l[0] += l[0]//N; l[1] += 1; l[-1] = -np.concatenate([scales*l[-1], [1]]); l[0] = np.concatenate([l[0],[(N+1)**2-1]]); l[1] = np.concatenate([l[1],[0]])
@@ -216,9 +248,11 @@ class SAP(object):
             h1 = np.zeros((N+1,N+1)); h1[-1,0] = np.sqrt(scales); h1[0,-1] = np.sqrt(scales); h1 = matrix(h1)
         else:
             c = matrix(w/np.linalg.norm(w))
+            if len(es) > 0:
+                et = np.vstack([e] + [-item for item in es])
 
-            G0 = csr_matrix(np.vstack([-np.eye(L),-e])); G0.eliminate_zeros(); G0 = csr_to_cvxopt(G0)
-            h0 = np.concatenate([np.zeros((L,)), [-1.]]); h0 = matrix(h0)
+            G0 = csr_matrix(np.vstack([-np.eye(L),-et])); G0.eliminate_zeros(); G0 = csr_to_cvxopt(G0)
+            h0 = np.concatenate([np.zeros((L,)), [-1.] + [item for item in rhs]]); h0 = matrix(h0)
 
             l = list(find(psi)); l[0] += l[0]//N; # NOTE: need to add a zero row every N entries since the last column of Phi is zero
             G1 = (-scales)*csr_matrix((l[-1],(l[0],l[1])), shape=((N+1)**2,L)); G1 = csr_to_cvxopt(G1)
@@ -262,7 +296,7 @@ class SAP(object):
         ee = np.zeros((N,1)); ee[0] = np.sqrt(scales)/eps
         return cp.bmat([[PHI,ee],[ee.T,cp.reshape(t,(1,1))]])
 
-    def cvxpy_solve(self, budget=None, eps=None, delta=0.0, cvxpy_params=None):
+    def cvxpy_solve(self, budget=None, eps=None, delta=0.0, max_model_samples=None, cvxpy_params=None):
 
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
@@ -275,6 +309,8 @@ class SAP(object):
         if cvxpy_params is not None:
             cvxpy_solver_params.update(cvxpy_params)
 
+        es,rhs = self.get_max_sample_constraints(max_model_samples)
+
         #scalings = np.array([np.linalg.norm(self.psi[:,i]) for i in range(L)])
         scales = 1/abs(self.psi).sum(axis=0).mean()
 
@@ -283,10 +319,10 @@ class SAP(object):
             t = cp.Variable(nonneg=True)
             obj = cp.Minimize(t)
 
-            constraints = [w@m <= 1, m@e >= 1/budget, self.cvxpy_fun(m,t=t,eps=None) >> 0]
+            constraints = [w@m <= 1, m@e >= 1/budget, self.cvxpy_fun(m,t=t,eps=None) >> 0] + [m@ee <= rr/budget for ee,rr in zip(es,rhs)]
         else:
             obj = cp.Minimize((w/np.linalg.norm(w))@m)
-            constraints = [m@e >= 1, self.cvxpy_fun(m,t=None,eps=eps) >> 0]
+            constraints = [m@e >= 1, self.cvxpy_fun(m,t=None,eps=eps) >> 0] + [m@ee <= rr for ee,rr in zip(es,rhs)]
 
         prob = cp.Problem(obj, constraints)
 
@@ -302,7 +338,7 @@ class SAP(object):
 
         return m.value
 
-    def scipy_solve(self, budget=None, eps=None, x0=None):
+    def scipy_solve(self, budget=None, eps=None, x0=None, max_model_samples=None):
         from scipy.optimize import minimize,LinearConstraint,NonlinearConstraint,Bounds
 
         if budget is None and eps is None:
@@ -314,25 +350,28 @@ class SAP(object):
         w = self.costs
         e = self.e
 
+        es,rhs = self.get_max_sample_constraints(max_model_samples)
+
         print("Optimizing using scipy...")
 
         constraint1 = Bounds(0.0*np.ones((L,)), np.inf*np.ones((L,)), keep_feasible=True)
         constraint3 = LinearConstraint(e, 1, np.inf, keep_feasible=True)
+        constraint4 = [LinearConstraint(ee,-np.inf, rr) for ee,rr in zip(es,rhs)]
         if budget is not None:
             constraint2 = LinearConstraint(w, -np.inf, budget)
 
             if x0 is None: x0 = np.ceil(10*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w)
-            res = minimize(lambda x : self.variance_GH(x,nohess=True,delta=delta)[:-1], x0, jac=True, hess=lambda x : self.variance_GH(x,delta=delta)[-1], bounds=constraint1, constraints=[constraint2,constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-8)
+            res = minimize(lambda x : self.variance_GH(x,nohess=True,delta=delta)[:-1], x0, jac=True, hess=lambda x : self.variance_GH(x,delta=delta)[-1], bounds=constraint1, constraints=[constraint2,constraint3] + constraint4, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-8)
 
         else:
             epsq = eps**2
             constraint2 = NonlinearConstraint(lambda x : self.variance(x,delta=delta), epsq, epsq, jac = lambda x : self.variance_GH(x,nohess=True,delta=delta)[1], hess=lambda x,p : self.variance_GH(x,delta=delta)[2]*p)
             if x0 is None: x0 = np.ceil(eps**-2*np.random.rand(L))
-            res = minimize(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=[constraint2,constraint3], method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-10)
+            res = minimize(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=[constraint2,constraint3] + constraint4, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-10)
 
         return res.x
 
-    def ipopt_solve(self, budget=None, eps=None, x0=None):
+    def ipopt_solve(self, budget=None, eps=None, x0=None, max_model_samples=None):
         from cyipopt import minimize_ipopt
 
         if budget is None and eps is None:
@@ -344,24 +383,27 @@ class SAP(object):
         w = self.costs
         e = self.e
 
+        es,rhs = self.get_max_sample_constraints(max_model_samples)
+
         print("Optimizing using ipopt...")
 
         options = {"maxiter":200, 'print_level':5, 'print_user_options' : 'yes', 'bound_relax_factor' : 1.e-30, 'honor_original_bounds' : 'yes', 'dual_inf_tol' : 1.e-5}
 
         constraint1 = [(0, np.inf) for i in range(L)]
         constraint3 = {'type':'ineq', 'fun': lambda x : e@x-1, 'jac': lambda x : e, 'hess': lambda x,p : 0}
+        constraint4 = [{'type':'ineq', 'fun': lambda x : rr-ee@x, 'jac': lambda x : -ee, 'hess': lambda x,p : 0} for ee,rr in zip(es,rhs)]
         if budget is not None:
             constraint2 = {'type':'ineq', 'fun': lambda x : budget - w@x, 'jac': lambda x : -w, 'hess': lambda x,p : 0}
 
             if x0 is None: x0 = np.ceil(10*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w)
-            res = minimize_ipopt(lambda x : self.variance_GH(x,nohess=True,delta=delta)[:-1], x0, jac=True, hess=lambda x : self.variance_GH(x,delta=delta)[-1], bounds=constraint1, constraints=[constraint2,constraint3], options=options, tol = 1.0e-12)
+            res = minimize_ipopt(lambda x : self.variance_GH(x,nohess=True,delta=delta)[:-1], x0, jac=True, hess=lambda x : self.variance_GH(x,delta=delta)[-1], bounds=constraint1, constraints=[constraint2,constraint3] + constraint4, options=options, tol = 1.0e-12)
 
         else:
             epsq = eps**2
             #constraint2 = NonlinearConstraint(lambda x : self.variance(x,delta=delta), epsq, epsq, jac = lambda x : self.variance_GH(x,nohess=True,delta=delta)[1], hess=lambda x,p : self.variance_GH(x,delta=delta)[2]*p)
             constraint2 = {'type':'ineq', 'fun': lambda x : epsq - self.variance(x,delta=delta), 'jac': lambda x : -self.variance_GH(x,nohess=True,delta=delta)[1], 'hess': lambda x,p : -self.variance_GH(x,delta=delta)[2]*p}
             if x0 is None: x0 = np.ceil(eps**-2*np.random.rand(L))
-            res = minimize_ipopt(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hess=lambda x : np.zeros((len(x),len(x))), bounds=constraint1, constraints=[constraint2,constraint3], options=options, tol = 1.0e-12)
+            res = minimize_ipopt(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hess=lambda x : np.zeros((len(x),len(x))), bounds=constraint1, constraints=[constraint2,constraint3] + constraint4, options=options, tol = 1.0e-12)
 
         print(res.x.round())
 
@@ -384,21 +426,26 @@ if __name__ == '__main__':
 
     problem = SAP(C, KK, groups, costs)
 
+    max_model_samples = np.inf*np.ones((N,)); max_model_samples[-4:] = 10.**(2*np.arange(4))
+
     scipy_sol,cvxpy_sol,ipopt_sol,cvxopt_sol = None,None,None,None
     if False:
-        cvxopt_sol = problem.solve(eps=eps, solver="cvxopt")
-        cvxpy_sol  = problem.solve(eps=eps, solver="cvxpy")
-        ipopt_sol  = problem.solve(eps=eps, solver="ipopt")
-        scipy_sol  = problem.solve(eps=eps, solver="scipy")
+        cvxopt_sol = problem.solve(eps=eps, max_model_samples=max_model_samples, solver="cvxopt")
+        cvxpy_sol  = problem.solve(eps=eps, max_model_samples=max_model_samples, solver="cvxpy")
+        ipopt_sol  = problem.solve(eps=eps, max_model_samples=max_model_samples, solver="ipopt")
+        scipy_sol  = problem.solve(eps=eps, max_model_samples=max_model_samples, solver="scipy")
         print("MSE tolerance: ", eps**2)
     else:
-        cvxopt_sol = problem.solve(budget=budget, solver="cvxopt")
-        cvxpy_sol  = problem.solve(budget=budget, solver="cvxpy")
-        ipopt_sol  = problem.solve(budget=budget, solver="ipopt")
-        scipy_sol  = problem.solve(budget=budget, solver="scipy")
+        cvxopt_sol = problem.solve(budget=budget, max_model_samples=max_model_samples, solver="cvxopt")
+        cvxpy_sol  = problem.solve(budget=budget, max_model_samples=max_model_samples, solver="cvxpy")
+        ipopt_sol  = problem.solve(budget=budget, max_model_samples=max_model_samples, solver="ipopt")
+        scipy_sol  = problem.solve(budget=budget, max_model_samples=max_model_samples, solver="scipy")
         print("Budget: ", budget)
 
     sols = [cvxopt_sol, cvxpy_sol, ipopt_sol, scipy_sol]
     fvals = [(costs@sol, problem.variance(sol)) for sol in sols if sol is not None]
+
+    es,rhs = problem.get_max_sample_constraints(max_model_samples)
+    assert all([[ee@sol <= rr for ee,rr in zip(es,rhs)] for sol in sols])
 
     print(fvals)
