@@ -12,7 +12,7 @@ from .cmisc import assemble_psi_c,objectiveK_c,gradK_c,hessKQ_c,cleanupK_c
 
 ##################################################################################################################
 
-def attempt_mlmc_setup(v, w, budget=None, eps=None):
+def attempt_mlmc_setup(v, w, budget=None, eps=None, continuous_relaxation=False):
     if budget is None and eps is None:
         raise ValueError("Need to specify either budget or RMSE tolerance")
     elif budget is not None and eps is not None:
@@ -34,8 +34,9 @@ def attempt_mlmc_setup(v, w, budget=None, eps=None):
         constraint = lambda m : variance(m) <= eps**2 and all(m >= 1)
         obj = lambda m : m@w
 
-    m,fval = best_closest_integer_solution(m, obj, constraint, len(v))
-    if np.isinf(fval): return False,None
+    if not continuous_relaxation:
+        m,fval = best_closest_integer_solution(m, obj, constraint, len(v))
+        if np.isinf(fval): return False,None
 
     err = np.sqrt(variance(m))
     tot_cost = m@w
@@ -44,7 +45,7 @@ def attempt_mlmc_setup(v, w, budget=None, eps=None):
 
     return True,mlmc_data
 
-def attempt_mfmc_setup(sigmas, rhos, costs, budget=None, eps=None):
+def attempt_mfmc_setup(sigmas, rhos, costs, budget=None, eps=None, continuous_relaxation=False):
     if budget is None and eps is None:
         raise ValueError("Need to specify either budget or RMSE tolerance")
     elif budget is not None and eps is not None:
@@ -80,8 +81,9 @@ def attempt_mfmc_setup(sigmas, rhos, costs, budget=None, eps=None):
         constraint = lambda m : variance(m) <= eps**2 and m[0] >= 1 and all(m[:-1] <= m[1:])
         obj = lambda m : m@w
 
-    m,fval = best_closest_integer_solution(m, obj, constraint, len(sigmas))
-    if np.isinf(fval): return False,None
+    if not continuous_relaxation:
+        m,fval = best_closest_integer_solution(m, obj, constraint, len(sigmas))
+        if np.isinf(fval): return False,None
 
     err = np.sqrt(variance(m))
     tot_cost = m@w
@@ -135,7 +137,7 @@ def unpackbits(x, num_bits):
     mask = 2**np.arange(num_bits, dtype=x.dtype).reshape([1, num_bits])
     return (x & mask).astype(bool).astype(np.uint8).reshape(xshape + [num_bits])
 
-def best_closest_integer_solution_BLUE_multi(sol, psis, w, e, mappings, budget=None, eps=None):
+def best_closest_integer_solution_BLUE_multi(sol, psis, w, e, mappings, budget=None, eps=None, max_samples_info=([],[])):
     
     No = len(mappings)
 
@@ -148,7 +150,7 @@ def best_closest_integer_solution_BLUE_multi(sol, psis, w, e, mappings, budget=N
     LL_max = 15
 
     if LL <= LL_max:
-        best_val, best_fval = best_closest_integer_solution_BLUE_multi_helper(sol, psis, w, e, mappings, budget, eps, lb_full, ub_full, idx_full)
+        best_val, best_fval = best_closest_integer_solution_BLUE_multi_helper(sol, psis, w, e, mappings, budget, eps, lb_full, ub_full, idx_full, max_samples_info=max_samples_info)
 
     else:
         print('WARNING! Too many dimensions to brute-force it. Randomising search. Note: result might not be optimal.')
@@ -176,7 +178,7 @@ def best_closest_integer_solution_BLUE_multi(sol, psis, w, e, mappings, budget=N
             comb = np.random.randint(2, size=LR)
             r_sol[r_idx] = r_bnds[comb, ee].T
 
-            best_val, best_fval = best_closest_integer_solution_BLUE_multi_helper(r_sol, psis, w, e, mappings, budget, eps, lb, ub, idx)
+            best_val, best_fval = best_closest_integer_solution_BLUE_multi_helper(r_sol, psis, w, e, mappings, budget, eps, lb, ub, idx, max_samples_info=max_samples_info)
 
         if trial >= 100 and best_val is None:
             print("Unable to find feasible integer solution.")
@@ -186,8 +188,10 @@ def best_closest_integer_solution_BLUE_multi(sol, psis, w, e, mappings, budget=N
 
     return best_val, best_fval
 
-def best_closest_integer_solution_BLUE_multi_helper(sol, psis, w, e, mappings, budget, eps, lb, ub, idx):
+def best_closest_integer_solution_BLUE_multi_helper(sol, psis, w, e, mappings, budget, eps, lb, ub, idx, max_samples_info=([],[])):
     from functools import reduce
+
+    ES,rhs = max_samples_info
 
     No = len(mappings)
 
@@ -207,6 +211,7 @@ def best_closest_integer_solution_BLUE_multi_helper(sol, psis, w, e, mappings, b
     basephis  = [psis[n]@baseval[mappings[n]] for n in range(No)]
     basecost = w@baseval
     basees    = [e[mappings[n]]@baseval[mappings[n]] for n in range(No)]
+    base_max_sample_check = [ees@baseval for ees in ES]
 
     redmaps = [np.array([i for i in range(len(idx)) if idx[i] in mappings[n]]) for n in range(No)]
     #redmaps = [np.array([np.argwhere(idx == item).flatten()[0] for item in mappings[n] if item in idx]) for n in range(No)]
@@ -222,6 +227,17 @@ def best_closest_integer_solution_BLUE_multi_helper(sol, psis, w, e, mappings, b
     es = np.unique(np.concatenate(es))
     ms = ms[:, es]
 
+    if len(ES) > 0:
+        if any([basees > rr for basees,rr in zip(base_max_sample_check,rhs)]):
+            return None, np.inf
+        else:
+            sample_check = [basees + ees[idx]@ms for basees,ees in zip(base_max_sample_check,ES)]
+            mask = np.argwhere(np.all([val_ees <= rr for val_ees,rr in zip(sample_check,rhs)],axis=0)).flatten()
+            if len(mask) == 0: return None,np.inf
+
+            try: ms = ms[:, mask]
+            except IndexError: return None,np.inf
+
     if budget is not None and basecost > budget: return None,np.inf
 
     costs = basecost + w[idx]@ms
@@ -234,6 +250,8 @@ def best_closest_integer_solution_BLUE_multi_helper(sol, psis, w, e, mappings, b
     else:
         # larger costs should correspond to smaller variances so reordering
         ms = ms[:, np.argsort(costs)[::-1]]
+
+    if np.prod(ms.shape) == 0: return None, np.inf
 
     phis  = [(basephis[n].reshape((-1,1)) + psis[n][:,idxs[n]]@ms[redmaps[n],:]).T.reshape((-1,N,N)) for n in range(No)]
     Vs    = [np.linalg.pinv(phis[n], hermitian=True)[:,0,0] for n in range(No)]
@@ -255,8 +273,9 @@ def best_closest_integer_solution_BLUE_multi_helper(sol, psis, w, e, mappings, b
 
     return best_val, best_fval
 
-def best_closest_integer_solution_BLUE(sol, psi, w, e, budget=None, eps=None):
+def best_closest_integer_solution_BLUE(sol, psi, w, e, budget=None, eps=None, max_samples_info=([],[])):
     N = int(round(np.sqrt(psi.shape[0])))
+    ES,rhs = max_samples_info
 
     lb,ub,idx = get_feasible_integer_bounds(sol, N, e=e)
 
@@ -276,11 +295,25 @@ def best_closest_integer_solution_BLUE(sol, psi, w, e, budget=None, eps=None):
     basephi  = psi@baseval
     basecost = w@baseval
     basee    = e@baseval
+    base_max_sample_check = [ees@baseval for ees in ES]
 
     if basee < 1:
         es = basee + e[idx]@ms
-        try: ms = ms[:, np.argwhere(es >= 1).flatten()]
+        mask = np.argwhere(es >= 1).flatten()
+        if len(mask) == 0: return None,np.inf
+        try: ms = ms[:, mask]
         except IndexError: return None,np.inf
+
+    if len(ES) > 0:
+        if any([basees > rr for basees,rr in zip(base_max_sample_check,rhs)]):
+            return None, np.inf
+        else:
+            sample_check = [basees + ees[idx]@ms for basees,ees in zip(base_max_sample_check,ES)]
+            mask = np.argwhere(np.all([val_ees <= rr for val_ees,rr in zip(sample_check,rhs)],axis=0)).flatten()
+            if len(mask) == 0: return None,np.inf
+
+            try: ms = ms[:, mask]
+            except IndexError: return None,np.inf
 
     if budget is not None and basecost > budget: return None,np.inf
 
@@ -292,6 +325,8 @@ def best_closest_integer_solution_BLUE(sol, psi, w, e, budget=None, eps=None):
     else:
         # larger costs should correspond to smaller variances so reordering
         ms = ms[:, np.argsort(costs)[::-1]]
+
+    if np.prod(ms.shape) == 0: return None, np.inf
 
     phis  = (basephi.reshape((-1,1)) + psi[:,idx]@ms).T.reshape((-1,N,N))
     Vs    = np.linalg.pinv(phis, hermitian=True, rcond=1.e-10)[:,0,0]

@@ -134,7 +134,7 @@ class SAP(object):
         self.variance_GH = variance_GH
         self.get_cleanup_matrix = get_cleanup_matrix
 
-    def integer_projection(self, samples, budget=None, eps=None): 
+    def integer_projection(self, samples, budget=None, eps=None, max_model_samples=None): 
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
 
@@ -149,8 +149,10 @@ class SAP(object):
 
         ss = samples.copy()
 
+        es,rhs = self.get_max_sample_constraints(max_model_samples)
+
         # STEP 0: standard
-        samples,fval = best_closest_integer_solution_BLUE(ss, self.psi, self.costs, self.e, budget=budget, eps=eps)
+        samples,fval = best_closest_integer_solution_BLUE(ss, self.psi, self.costs, self.e, budget=budget, eps=eps, max_samples_info=(es,rhs))
 
         # STEP 1: increase tolerances
         if np.isinf(fval):
@@ -158,13 +160,21 @@ class SAP(object):
                 print("WARNING! An integer solution satisfying the constraints could not be found. Increasing the tolerance/budget.\n")
                 fac = 10.**-i
                 new_budget,new_eps = increase_tolerance(budget,eps,fac)
-                samples,fval = best_closest_integer_solution_BLUE(ss, self.psi, self.costs, self.e, budget=budget, eps=eps)
+                samples,fval = best_closest_integer_solution_BLUE(ss, self.psi, self.costs, self.e, budget=budget, eps=eps, max_samples_info=(es,rhs))
                 if not np.isinf(fval): break
 
-        # STEP 2: Round up
+        # STEP 2: Round up or down
         if np.isinf(fval):
-            print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget. Rounding up.\n")
-            samples = np.ceil(ss)
+            if max_model_samples is not None and not all([np.ceil(ss)@ee <= rr for ee,rr in zip(es,rhs)]):
+                samples = np.floor(ss)
+                if samples@self.e >= 1.0:
+                    print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget. Rounding down to satisfy max model sample constraints.\n")
+                else:
+                    samples = np.ceil(ss)
+                    print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget and the max model sample constraints could not be satisfied. Rounding up.\n")
+            else:
+                print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget. Rounding up.\n")
+                samples = np.ceil(ss)
 
         return samples.astype(int)
     
@@ -183,7 +193,7 @@ class SAP(object):
         elif solver == "ipopt":  samples = self.ipopt_solve(budget=budget, eps=eps, x0=x0, max_model_samples=max_model_samples)
 
         if not continuous_relaxation:
-            samples = self.integer_projection(samples, budget=budget, eps=eps)
+            samples = self.integer_projection(samples, budget=budget, eps=eps, max_model_samples=max_model_samples)
 
         self.samples = samples
         self.budget = budget
@@ -252,7 +262,7 @@ class SAP(object):
                 et = np.vstack([e] + [-item for item in es])
 
             G0 = csr_matrix(np.vstack([-np.eye(L),-et])); G0.eliminate_zeros(); G0 = csr_to_cvxopt(G0)
-            h0 = np.concatenate([np.zeros((L,)), [-1.] + [item for item in rhs]]); h0 = matrix(h0)
+            h0 = np.concatenate([np.zeros((L,)), [-1.], rhs]); h0 = matrix(h0)
 
             l = list(find(psi)); l[0] += l[0]//N; # NOTE: need to add a zero row every N entries since the last column of Phi is zero
             G1 = (-scales)*csr_matrix((l[-1],(l[0],l[1])), shape=((N+1)**2,L)); G1 = csr_to_cvxopt(G1)

@@ -181,19 +181,21 @@ if variance_test:
 if solver_test:
 
     K = 3; eps = 0.0005; budget = 1000.
+    #max_model_samples = np.inf*np.ones((M,)); max_model_samples[-1:] = 100
+    max_model_samples = None
 
     out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
-    out_cvxopt = problem.setup_solver(K=K, budget=budget, solver="cvxopt", optimization_solver_params={'feastol':1.e-5})[1]
-    out_cvxpy  = problem.setup_solver(K=K, budget=budget, solver="cvxpy", optimization_solver_params={'feastol':1.e-5})[1]
-    out_ipopt  = problem.setup_solver(K=K, budget=budget, solver="ipopt")[1]
-    out_scipy  = problem.setup_solver(K=K, budget=budget, solver="scipy")[1]
+    out_cvxopt = problem.setup_solver(K=K, budget=budget, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params={'feastol':1.e-5})[1]
+    out_cvxpy  = problem.setup_solver(K=K, budget=budget, max_model_samples=max_model_samples, solver="cvxpy", optimization_solver_params={'feastol':1.e-5})[1]
+    out_ipopt  = problem.setup_solver(K=K, budget=budget, max_model_samples=max_model_samples, solver="ipopt")[1]
+    out_scipy  = problem.setup_solver(K=K, budget=budget, max_model_samples=max_model_samples, solver="scipy")[1]
     out1 = (out_cvxpy, out_cvxopt, out_ipopt, out_scipy); [out.pop('samples') for out in out1 if out is not None]
 
     out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
-    out_cvxopt = problem.setup_solver(K=K, eps=eps, solver="cvxopt", optimization_solver_params={'feastol':1.e-7})[1]
-    out_cvxpy  = problem.setup_solver(K=K, eps=eps, solver="cvxpy", optimization_solver_params={'feastol':1.e-7})[1]
-    out_ipopt  = problem.setup_solver(K=K, eps=eps, solver="ipopt")[1]
-    out_scipy  = problem.setup_solver(K=K, eps=eps, solver="scipy")[1]
+    out_cvxopt = problem.setup_solver(K=K, eps=eps, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params={'feastol':1.e-7})[1]
+    out_cvxpy  = problem.setup_solver(K=K, eps=eps, max_model_samples=max_model_samples, solver="cvxpy", optimization_solver_params={'feastol':1.e-7})[1]
+    out_ipopt  = problem.setup_solver(K=K, eps=eps, max_model_samples=max_model_samples, solver="ipopt")[1]
+    out_scipy  = problem.setup_solver(K=K, eps=eps, max_model_samples=max_model_samples, solver="scipy")[1]
     out2 = (out_cvxpy, out_cvxopt, out_ipopt, out_scipy); [out.pop('samples') for out in out2 if out is not None]
     
     print(out1, "\n", out2)

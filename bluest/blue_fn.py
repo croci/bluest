@@ -89,7 +89,7 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
 
     if verbose:
         l = len('Sampling models %s [] 100%%' % ls)
-        part = max(round(0.9*(cols-l)),0)
+        part = max(int(round(0.9*(cols-l))),0)
         fmtstr = '{0: <%d}' % part
         print("\rSampling models %s [%s] %d%%" % (ls, fmtstr.format(''), 0), end="\r", flush=True)
 
@@ -161,7 +161,7 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
                 sumsc[n] += array([[sum(inners[n](Ps[n][i][n2],Ps[n][j][n2]) for n2 in range(N2)) for i in range(L)] for j in range(L)])
 
         if verbose:
-            print("\rSampling models %s [%s] %d%%" % (ls, fmtstr.format('='*round(part*it/NN[mpiRank])), (100*it)//NN[mpiRank]), end='\r', flush=True)
+            print("\rSampling models %s [%s] %d%%" % (ls, fmtstr.format('='*int(round(part*it/NN[mpiRank]))), (100*it)//NN[mpiRank]), end='\r', flush=True)
 
     if verbose:
         l = len('Sampling of models %s completed.' % ls)

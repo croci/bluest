@@ -467,7 +467,7 @@ class BLUEProblem(object):
     def blue_fn(self, ls, N, verbose=True, compute_mlmc_differences=False):
         return blue_fn(ls, N, self, sampler=self.sampler, inners=self.get_models_inner_products(), comm = self.get_comm(), N1=self.params["sample_batch_size"], No=self.n_outputs, compute_mlmc_differences=compute_mlmc_differences, verbose=verbose, filename=self.params["samplefile"], outputs_to_save=self.params["outputs_to_save"])
 
-    def setup_solver(self, K=3, budget=None, eps=None, groups=None, multi_groups=None, solver=None, continuous_relaxation=False, optimization_solver_params=None):
+    def setup_solver(self, K=3, budget=None, eps=None, groups=None, multi_groups=None, solver=None, continuous_relaxation=False, max_model_samples=None, optimization_solver_params=None):
         if budget is None and eps is None: raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None: eps = None
         if eps is not None and isinstance(eps,(int,float,np.int,np.float)): eps = [eps for n in range(self.n_outputs)]
@@ -528,7 +528,7 @@ class BLUEProblem(object):
         if self.verbose: print("Computing optimal sample allocation...")
         if self.mpiRank == 0:
             self.MOSAP = MOSAP(C, K, Ks, groups, multi_groups, costs, multi_costs)
-            self.MOSAP.solve(eps=eps, budget=budget, solver=solver, continuous_relaxation=continuous_relaxation, solver_params=optimization_solver_params)
+            self.MOSAP.solve(eps=eps, budget=budget, solver=solver, continuous_relaxation=continuous_relaxation, max_model_samples=max_model_samples, solver_params=optimization_solver_params)
             Vs = self.MOSAP.variances(self.MOSAP.samples)
 
             cost_BLUE = self.MOSAP.tot_cost
@@ -551,13 +551,13 @@ class BLUEProblem(object):
 
         return which_groups, blue_data
 
-    def solve(self, K=3, budget=None, eps=None, groups=None, multi_groups=None, solver=None, verbose=True, optimization_solver_params=None):
+    def solve(self, K=3, budget=None, eps=None, groups=None, multi_groups=None, solver=None, verbose=True, continuous_relaxation=False, max_model_samples=None, optimization_solver_params=None):
         if solver is None: solver = self.params["optimization_solver"]
         if self.MOSAP_output is None:
-            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, multi_groups=multi_groups, solver=solver, optimization_solver_params=optimization_solver_params)
+            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, multi_groups=multi_groups, solver=solver, continuous_relaxation=continuous_relaxation, max_model_samples=max_model_samples, optimization_solver_params=optimization_solver_params)
 
         elif budget is not None and budget != self.MOSAP_output['budget'] or eps is not None and eps != self.MOSAP_output['eps']:
-            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, multi_groups=multi_groups, solver=solver, optimization_solver_params=optimization_solver_params)
+            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, multi_groups=multi_groups, solver=solver, continuous_relaxation=continuous_relaxation, max_model_samples=max_model_samples, optimization_solver_params=optimization_solver_params)
         elif budget is None and eps is None and self.MOSAP_output['cost'] is None: # if cost is not None, then the optimal samples have been found
             raise ValueError("Need to prescribe either a budget or an error tolerance to run the BLUE estimator")
 
@@ -589,7 +589,7 @@ class BLUEProblem(object):
 
         return mus,errs,tot_cost
 
-    def setup_mlmc(self, budget=None, eps=None):
+    def setup_mlmc(self, budget=None, eps=None, continuous_relaxation=False):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:
@@ -651,7 +651,7 @@ class BLUEProblem(object):
 
                     subw[:-1] += subw[1:]
                 else: v = subC[0]
-                feasible, mlmc_data_list[n] = attempt_mlmc_setup(v, subw, budget=budget, eps=eps[n])
+                feasible, mlmc_data_list[n] = attempt_mlmc_setup(v, subw, budget=budget, eps=eps[n], continuous_relaxation=continuous_relaxation)
                 if not feasible: break
 
             if not feasible: continue
@@ -684,13 +684,13 @@ class BLUEProblem(object):
         if self.verbose: print("Best MLMC estimator found. Coupled models:", best_group, " Max error: ", max(errs), " Cost: ", cost, "\n")
         return best_group, mlmc_data
 
-    def solve_mlmc(self, budget=None, eps=None):
+    def solve_mlmc(self, budget=None, eps=None, continuous_relaxation=False):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:
             eps = None
 
-        best_group, mlmc_data = self.setup_mlmc(budget=budget, eps=eps)
+        best_group, mlmc_data = self.setup_mlmc(budget=budget, eps=eps, continuous_relaxation=continuous_relaxation)
 
         samples  = mlmc_data["samples"]
         errs      = mlmc_data["errors"]
@@ -710,7 +710,7 @@ class BLUEProblem(object):
 
         return mu, errs, tot_cost
 
-    def setup_mfmc(self, budget=None, eps=None):
+    def setup_mfmc(self, budget=None, eps=None, continuous_relaxation=False):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:
@@ -735,7 +735,7 @@ class BLUEProblem(object):
             assert clique[0] == 0
             mfmc_data_list = [{} for n in range(self.n_outputs)]
             for n in range(self.n_outputs):
-                feasible,mfmc_data_list[n] = attempt_mfmc_setup(sigmas[n][clique], rhos[n][clique], w[clique], budget=budget, eps=eps[n])
+                feasible,mfmc_data_list[n] = attempt_mfmc_setup(sigmas[n][clique], rhos[n][clique], w[clique], budget=budget, eps=eps[n], continuous_relaxation=continuous_relaxation)
                 if not feasible: break
 
             if not feasible: continue
@@ -769,13 +769,13 @@ class BLUEProblem(object):
         if self.verbose: print("Best MFMC estimator found. Coupled models:", best_group, " Max error: ", max(errs), " Cost: ", cost, "\n")
         return best_group, mfmc_data
 
-    def solve_mfmc(self, budget=None, eps=None):
+    def solve_mfmc(self, budget=None, eps=None, continuous_relaxation=False):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:
             eps = None
 
-        best_group, mfmc_data = self.setup_mfmc(budget=budget, eps=eps)
+        best_group, mfmc_data = self.setup_mfmc(budget=budget, eps=eps, continuous_relaxation=continuous_relaxation)
 
         samples  = mfmc_data["samples"]
         errs     = mfmc_data["errors"]
