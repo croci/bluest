@@ -205,7 +205,7 @@ if verbose: print("\n\n\n", "Exact full covariance with sample restrictions:\n",
 if perform_variance_test: err_ex, err = problem.variance_test(N=5, K=K, eps=eps, continuous_relaxation=False, max_model_samples=max_model_samples)
 
 printouts = [printout]
-errors = [[err_ex, err]]
+errors = [np.array([err_ex[0], err[0]])]
 if check_all:
     for i in range(M):
         if verbose: print("\n\nType: ", i, "\n\n", flush=True)
@@ -223,12 +223,12 @@ if check_all:
         printouts.append(StringIO())
         if verbose: print("\n", "Trick of type %d:\n" % i, "BLUE: ", int(out_BLUE[1]["total_cost"]), "\n MLMC: ", int(out_MLMC[1]["total_cost"]), " ", file=printouts[-1])
         if perform_variance_test: err_ex, err = problem.variance_test(N=5, K=K, eps=eps, continuous_relaxation=False, max_model_samples=max_model_samples)
-        errors.append([err_ex,err])
+        errors.append(np.array([err_ex[0],err[0]]))
 
 if verbose:
     for i in range(len(printouts)):
         print(printouts[i].getvalue()[:-2])
 
-    errors = np.vstack(errors)
+    errors_vec = np.vstack(errors)
     print("\nEstimator error, theoretical vs actual:\n\n", errors, flush=True)
-    np.savez("estimator_errors%d.npz" % Nrestr, errors=errors)
+    np.savez("estimator_errors%d.npz" % Nrestr, errors=errors_vec)
