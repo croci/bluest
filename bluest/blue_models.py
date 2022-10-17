@@ -844,7 +844,7 @@ class BLUEProblem(object):
         if self.verbose: print("Estimated rate:", rate)
         return tot_cost, rate
 
-    def variance_test(self, budget=None, eps=None, K=3, N=50):
+    def variance_test(self, budget=None, eps=None, K=3, N=50, **kwargs):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:
@@ -853,7 +853,7 @@ class BLUEProblem(object):
 
         if self.verbose: print("Running variance test...", flush=True)
 
-        self.setup_solver(K=K, budget=budget, eps=eps, solver="cvxpy")
+        self.setup_solver(K=K, budget=budget, eps=eps, **kwargs)
         err_ex = np.sqrt(self.MOSAP_output['variances'])
         err = np.zeros_like(err_ex)
 
