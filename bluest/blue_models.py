@@ -630,58 +630,66 @@ class BLUEProblem(object):
         if not any(np.isfinite(dVn).any() for dVn in dV):
             if self.mpiRank == 0: print("\nWarning! MLMC variances were not provided nor estimated. The resulting MLMC estimator might be suboptimal.\nThe estimation and use of MLMC variances is a new feature so this warning might be caused by an old datafile. To fix this, delete the old datafile and re-run the covariance estimation routine.\n")
 
-        for group in groups:
-            assert group[0] == 0
-            mlmc_data_list = [{} for n in range(self.n_outputs)]
-            # getting actual MLMC costs and variances
-            for n in range(self.n_outputs):
-                C = CC[n]
-                subC = C[np.ix_(group,group)]
-                subw = w[group].copy()
-                if len(group) > 1:
-                    v,corrs = np.diag(subC).copy(), np.diag(subC,1)
-                    v[:-1]    += v[1:] - 2*corrs
-                    # if better value available from dV, then use it
-                    for i in range(len(group)-1):
-                        ii = min(group[i], group[i+1])
-                        jj = max(group[i], group[i+1])
-                        check = dV[n][ii,jj]
-                        if np.isfinite(check):
-                            v[i] = check
+        if self.mpiRank == 0:
+            for group in groups:
+                assert group[0] == 0
+                mlmc_data_list = [{} for n in range(self.n_outputs)]
+                # getting actual MLMC costs and variances
+                for n in range(self.n_outputs):
+                    C = CC[n]
+                    subC = C[np.ix_(group,group)]
+                    subw = w[group].copy()
+                    if len(group) > 1:
+                        v,corrs = np.diag(subC).copy(), np.diag(subC,1)
+                        v[:-1]    += v[1:] - 2*corrs
+                        # if better value available from dV, then use it
+                        for i in range(len(group)-1):
+                            ii = min(group[i], group[i+1])
+                            jj = max(group[i], group[i+1])
+                            check = dV[n][ii,jj]
+                            if np.isfinite(check):
+                                v[i] = check
 
-                    subw[:-1] += subw[1:]
-                else: v = subC[0]
-                feasible, mlmc_data_list[n] = attempt_mlmc_setup(v, subw, budget=budget, eps=eps[n], continuous_relaxation=continuous_relaxation)
-                if not feasible: break
+                        subw[:-1] += subw[1:]
+                    else: v = subC[0]
+                    feasible, mlmc_data_list[n] = attempt_mlmc_setup(v, subw, budget=budget, eps=eps[n], continuous_relaxation=continuous_relaxation)
+                    if not feasible: break
 
-            if not feasible: continue
+                if not feasible: continue
 
-            if budget is not None:
-                err = max(mlmc_data["error"] for mlmc_data in mlmc_data_list)
-                if err < min_err:
-                    min_err = err
-                    best_group = group
-                    for n in range(self.n_outputs):
-                        best_data[n].update(mlmc_data_list[n])
-            else:
-                cost = np.max(np.vstack([mlmc_data["samples"] for mlmc_data in mlmc_data_list]), axis=0)@w[group]
-                if cost < min_cost:
-                    min_cost = cost
-                    best_group = group
-                    for n in range(self.n_outputs):
-                        best_data[n].update(mlmc_data_list[n])
+                if budget is not None:
+                    err = max(mlmc_data["error"] for mlmc_data in mlmc_data_list)
+                    if err < min_err:
+                        min_err = err
+                        best_group = group
+                        for n in range(self.n_outputs):
+                            best_data[n].update(mlmc_data_list[n])
+                else:
+                    cost = np.max(np.vstack([mlmc_data["samples"] for mlmc_data in mlmc_data_list]), axis=0)@w[group]
+                    if cost < min_cost:
+                        min_cost = cost
+                        best_group = group
+                        for n in range(self.n_outputs):
+                            best_data[n].update(mlmc_data_list[n])
 
-        samples = np.max(np.vstack([mlmc_data["samples"] for mlmc_data in best_data]), axis=0)
-        cost = samples@w[best_group]
-        if budget is not None: # adjust if budget bound. The max above already takes care of the variance bound.
-            samples = np.floor(samples - (max(cost-budget,0)/(w[best_group]@w[best_group]))*w[best_group]).astype(int)
-            samples[0] = max(samples[0], 1) # need at least one sample on level 0
+            samples = np.max(np.vstack([mlmc_data["samples"] for mlmc_data in best_data]), axis=0)
             cost = samples@w[best_group]
+            if budget is not None: # adjust if budget bound. The max above already takes care of the variance bound.
+                samples = np.floor(samples - (max(cost-budget,0)/(w[best_group]@w[best_group]))*w[best_group]).astype(int)
+                samples[0] = max(samples[0], 1) # need at least one sample on level 0
+                cost = samples@w[best_group]
 
-        errs = [np.sqrt(mlmc_data["variance"](samples)) for mlmc_data in best_data]
+            errs = [np.sqrt(mlmc_data["variance"](samples)) for mlmc_data in best_data]
 
-        mlmc_data = {"samples" : samples, "errors" : errs, "total_cost" : cost}
-        if self.verbose: print("Best MLMC estimator found. Coupled models:", best_group, " Max error: ", max(errs), " Cost: ", cost, "\n")
+            mlmc_data = {"samples" : samples, "errors" : errs, "total_cost" : cost}
+            if self.verbose: print("Best MLMC estimator found. Coupled models:", best_group, " Max error: ", max(errs), " Cost: ", cost, "\n")
+        else:
+            best_group = None
+            mlmc_data = None
+
+        best_group = COMM_WORLD.bcast(best_group, root=0)
+        mlmc_data = COMM_WORLD.bcast(mlmc_data, root=0)
+
         return best_group, mlmc_data
 
     def solve_mlmc(self, budget=None, eps=None, continuous_relaxation=False):
@@ -724,49 +732,57 @@ class BLUEProblem(object):
 
         if self.verbose: print("Setting up optimal MFMC estimator...\n") 
 
-        GG = nx.intersection_all(self.G)
+        if self.mpiRank == 0:
+            GG = nx.intersection_all(self.G)
 
-        best_group = None
-        min_err  = np.inf
-        min_cost = np.inf
-        best_data = [{} for n in range(self.n_outputs)]
-        clique_list = [clique for clique in nx.enumerate_all_cliques(GG) if 0 in clique]
-        for clique in clique_list:
-            assert clique[0] == 0
-            mfmc_data_list = [{} for n in range(self.n_outputs)]
-            for n in range(self.n_outputs):
-                feasible,mfmc_data_list[n] = attempt_mfmc_setup(sigmas[n][clique], rhos[n][clique], w[clique], budget=budget, eps=eps[n], continuous_relaxation=continuous_relaxation)
-                if not feasible: break
+            best_group = None
+            min_err  = np.inf
+            min_cost = np.inf
+            best_data = [{} for n in range(self.n_outputs)]
+            clique_list = [clique for clique in nx.enumerate_all_cliques(GG) if 0 in clique]
+            for clique in clique_list:
+                assert clique[0] == 0
+                mfmc_data_list = [{} for n in range(self.n_outputs)]
+                for n in range(self.n_outputs):
+                    feasible,mfmc_data_list[n] = attempt_mfmc_setup(sigmas[n][clique], rhos[n][clique], w[clique], budget=budget, eps=eps[n], continuous_relaxation=continuous_relaxation)
+                    if not feasible: break
 
-            if not feasible: continue
+                if not feasible: continue
 
-            if budget is not None:
-                err = max(mfmc_data["error"] for mfmc_data in mfmc_data_list)
-                if err < min_err:
-                    min_err = err
-                    best_group = clique
-                    for n in range(self.n_outputs):
-                        best_data[n].update(mfmc_data_list[n])
-            else:
-                cost = np.max(np.vstack([mfmc_data["samples"] for mfmc_data in mfmc_data_list]), axis=0)@w[clique]
-                if cost < min_cost:
-                    min_cost = cost
-                    best_group = clique
-                    for n in range(self.n_outputs):
-                        best_data[n].update(mfmc_data_list[n])
+                if budget is not None:
+                    err = max(mfmc_data["error"] for mfmc_data in mfmc_data_list)
+                    if err < min_err:
+                        min_err = err
+                        best_group = clique
+                        for n in range(self.n_outputs):
+                            best_data[n].update(mfmc_data_list[n])
+                else:
+                    cost = np.max(np.vstack([mfmc_data["samples"] for mfmc_data in mfmc_data_list]), axis=0)@w[clique]
+                    if cost < min_cost:
+                        min_cost = cost
+                        best_group = clique
+                        for n in range(self.n_outputs):
+                            best_data[n].update(mfmc_data_list[n])
 
-        samples = np.max(np.vstack([mfmc_data["samples"] for mfmc_data in best_data]), axis=0)
-        cost = samples@w[best_group]
-        if budget is not None: # adjust if budget bound. The max above already takes care of the variance bound.
-            samples = np.floor(samples - (max(cost-budget,0)/(w[best_group]@w[best_group]))*w[best_group]).astype(int)
-            samples[0] = max(samples[0], 1) # need at least one sample on level 0
+            samples = np.max(np.vstack([mfmc_data["samples"] for mfmc_data in best_data]), axis=0)
             cost = samples@w[best_group]
+            if budget is not None: # adjust if budget bound. The max above already takes care of the variance bound.
+                samples = np.floor(samples - (max(cost-budget,0)/(w[best_group]@w[best_group]))*w[best_group]).astype(int)
+                samples[0] = max(samples[0], 1) # need at least one sample on level 0
+                cost = samples@w[best_group]
 
-        errs = [np.sqrt(mfmc_data["variance"](samples)) for mfmc_data in best_data]
+            errs = [np.sqrt(mfmc_data["variance"](samples)) for mfmc_data in best_data]
 
-        alphas = [mfmc_data["alphas"] for mfmc_data in best_data]
-        mfmc_data = {"samples" : samples, "errors" : errs, "total_cost" : cost, "alphas" : alphas}
-        if self.verbose: print("Best MFMC estimator found. Coupled models:", best_group, " Max error: ", max(errs), " Cost: ", cost, "\n")
+            alphas = [mfmc_data["alphas"] for mfmc_data in best_data]
+            mfmc_data = {"samples" : samples, "errors" : errs, "total_cost" : cost, "alphas" : alphas}
+            if self.verbose: print("Best MFMC estimator found. Coupled models:", best_group, " Max error: ", max(errs), " Cost: ", cost, "\n")
+        else:
+            best_group = None
+            mfmc_data = None
+
+        best_group = COMM_WORLD.bcast(best_group, root=0)
+        mfmc_data  = COMM_WORLD.bcast(mfmc_data, root=0)
+
         return best_group, mfmc_data
 
     def solve_mfmc(self, budget=None, eps=None, continuous_relaxation=False):

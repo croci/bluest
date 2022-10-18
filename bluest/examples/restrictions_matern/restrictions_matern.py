@@ -191,7 +191,7 @@ def extrapolated(ndiags=1):
     return newC,newdV
 
 check_all = True
-perform_variance_test = True
+perform_variance_test = False
 K = 5
 eps = 1.e-2*np.sqrt(true_C[0,0])
 max_model_samples = np.inf*np.ones((M,)); max_model_samples[:2] = Nrestr
@@ -202,10 +202,11 @@ out_MLMC = problem.setup_mlmc(eps=eps)
 out_MFMC = problem.setup_mfmc(eps=eps)
 printout = StringIO()
 if verbose: print("\n\n\n", "Exact full covariance with sample restrictions:\n", "BLUE: ", int(out_BLUE[1]["total_cost"]), "\n MLMC: ", int(out_MLMC[1]["total_cost"]), "\n MFMC: ", int(out_MFMC[1]["total_cost"])," ", file=printout)
-if perform_variance_test: err_ex, err = problem.variance_test(N=5, K=K, eps=eps, continuous_relaxation=False, max_model_samples=max_model_samples)
+if perform_variance_test:
+    err_ex, err = problem.variance_test(N=100, K=K, eps=eps, continuous_relaxation=False, max_model_samples=max_model_samples)
+    errors = [np.array([err_ex[0], err[0]])]
 
 printouts = [printout]
-errors = [np.array([err_ex[0], err[0]])]
 if check_all:
     for i in range(M):
         if verbose: print("\n\nType: ", i, "\n\n", flush=True)
@@ -222,13 +223,15 @@ if check_all:
         out_MLMC = problem.setup_mlmc(eps=eps)
         printouts.append(StringIO())
         if verbose: print("\n", "Trick of type %d:\n" % i, "BLUE: ", int(out_BLUE[1]["total_cost"]), "\n MLMC: ", int(out_MLMC[1]["total_cost"]), " ", file=printouts[-1])
-        if perform_variance_test: err_ex, err = problem.variance_test(N=5, K=K, eps=eps, continuous_relaxation=False, max_model_samples=max_model_samples)
-        errors.append(np.array([err_ex[0],err[0]]))
+        if perform_variance_test:
+            err_ex, err = problem.variance_test(N=50, K=K, eps=eps, continuous_relaxation=False, max_model_samples=max_model_samples)
+            errors.append(np.array([err_ex[0],err[0]]))
 
 if verbose:
     for i in range(len(printouts)):
         print(printouts[i].getvalue()[:-2])
 
-    errors_vec = np.vstack(errors)
-    print("\nEstimator error, theoretical vs actual:\n\n", errors, flush=True)
-    np.savez("estimator_errors%d.npz" % Nrestr, errors=errors_vec)
+    if perform_variance_test:
+        errors_vec = np.vstack(errors)
+        print("\nEstimator error, theoretical vs actual:\n\n", errors, flush=True)
+        np.savez("estimator_errors%d.npz" % Nrestr, errors=errors_vec)
