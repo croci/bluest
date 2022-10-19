@@ -19,6 +19,7 @@ spg_default_params = {"maxit" : 10000,
 
 default_params = {
                     "verbose" : True,
+                    "comm" : COMM_WORLD,
                     "remove_uncorrelated" : True,
                     "optimization_solver" : "cvxpy",
                     "covariance_estimation_samples" : 100,
@@ -66,8 +67,9 @@ class BLUEProblem(object):
         params["spg_params"] = spg_params
         self.params.update(params)
         
-        self.mpiSize = COMM_WORLD.Get_size()
-        self.mpiRank = COMM_WORLD.Get_rank()
+        self.comm    = self.params["comm"]
+        self.mpiSize = self.comm.Get_size()
+        self.mpiRank = self.comm.Get_rank()
         self.warning = self.mpiRank == 0
         self.verbose = self.params["verbose"] and self.warning
 
@@ -121,7 +123,7 @@ class BLUEProblem(object):
             MPI_COMM_WORLD. Note that the BLUEProblem class uses MPI_COMM_WORLD
             for everything else even if the sampling routine doesn't.
         '''
-        return COMM_WORLD
+        return self.comm
 
     #################### UTILITY FUNCTIONS #######################
 
@@ -262,7 +264,7 @@ class BLUEProblem(object):
             costs = self.get_costs()
             np.savez(filename, M = self.M, n_outputs = self.n_outputs, costs=costs, **C_dict, SG=self.SG, dV=self.dV)
 
-        COMM_WORLD.barrier()
+        self.comm.barrier()
 
     def load_graph_data(self, filename, costs=None):
         if self.mpiRank == 0:
@@ -270,7 +272,7 @@ class BLUEProblem(object):
         else:
             data = None
 
-        data = COMM_WORLD.bcast(data, root=0)
+        data = self.comm.bcast(data, root=0)
 
         if self.M != int(data["M"]) or self.n_outputs > int(data["n_outputs"]):
             raise ValueError("Loaded data number of models and/or number of outputs mismatch with the user-given values")
@@ -439,8 +441,8 @@ class BLUEProblem(object):
             C_new = None
             err = None
 
-        C_new = COMM_WORLD.bcast(C_new, root=0)
-        err   = COMM_WORLD.bcast(err, root=0)
+        C_new = self.comm.bcast(C_new, root=0)
+        err   = self.comm.bcast(err, root=0)
 
         for i in range(self.M):
             for j in range(self.M):
@@ -465,7 +467,7 @@ class BLUEProblem(object):
     #################### SOLVERS #######################
 
     def blue_fn(self, ls, N, verbose=True, compute_mlmc_differences=False):
-        return blue_fn(ls, N, self, sampler=self.sampler, inners=self.get_models_inner_products(), comm = self.get_comm(), N1=self.params["sample_batch_size"], No=self.n_outputs, compute_mlmc_differences=compute_mlmc_differences, verbose=verbose, filename=self.params["samplefile"], outputs_to_save=self.params["outputs_to_save"])
+        return blue_fn(ls, N, self, sampler=self.sampler, inners=self.get_models_inner_products(), comm = self.get_comm(), N1=self.params["sample_batch_size"], No=self.n_outputs, compute_mlmc_differences=compute_mlmc_differences, verbose=self.verbose and verbose, filename=self.params["samplefile"], outputs_to_save=self.params["outputs_to_save"])
 
     def setup_solver(self, K=3, budget=None, eps=None, groups=None, multi_groups=None, solver=None, continuous_relaxation=False, max_model_samples=None, optimization_solver_params=None):
         if budget is None and eps is None: raise ValueError("Need to specify either budget or RMSE tolerance")
@@ -527,7 +529,7 @@ class BLUEProblem(object):
 
         if self.verbose: print("Computing optimal sample allocation...")
         if self.mpiRank == 0:
-            self.MOSAP = MOSAP(C, K, Ks, groups, multi_groups, costs, multi_costs)
+            self.MOSAP = MOSAP(C, K, Ks, groups, multi_groups, costs, multi_costs, verbose=self.verbose)
             self.MOSAP.solve(eps=eps, budget=budget, solver=solver, continuous_relaxation=continuous_relaxation, max_model_samples=max_model_samples, solver_params=optimization_solver_params)
             Vs = self.MOSAP.variances(self.MOSAP.samples)
 
@@ -540,7 +542,7 @@ class BLUEProblem(object):
         else:
             self.MOSAP_output = None
 
-        self.MOSAP_output = COMM_WORLD.bcast(self.MOSAP_output, root=0)
+        self.MOSAP_output = self.comm.bcast(self.MOSAP_output, root=0)
 
         # FIXME: flattened groups will be the union between all the possible groups selected above
         which_groups = [self.MOSAP_output['flattened_groups'][item] for item in np.argwhere(self.MOSAP_output['samples'] > 0).flatten()]
@@ -581,8 +583,8 @@ class BLUEProblem(object):
         else:
             mus,Vs = None,None
 
-        mus = COMM_WORLD.bcast(mus, root=0)
-        Vs  = COMM_WORLD.bcast(Vs, root=0)
+        mus = self.comm.bcast(mus, root=0)
+        Vs  = self.comm.bcast(Vs, root=0)
 
         errs = np.sqrt(Vs)
         tot_cost = self.MOSAP_output['cost']
@@ -687,8 +689,8 @@ class BLUEProblem(object):
             best_group = None
             mlmc_data = None
 
-        best_group = COMM_WORLD.bcast(best_group, root=0)
-        mlmc_data = COMM_WORLD.bcast(mlmc_data, root=0)
+        best_group = self.comm.bcast(best_group, root=0)
+        mlmc_data = self.comm.bcast(mlmc_data, root=0)
 
         return best_group, mlmc_data
 
@@ -780,8 +782,8 @@ class BLUEProblem(object):
             best_group = None
             mfmc_data = None
 
-        best_group = COMM_WORLD.bcast(best_group, root=0)
-        mfmc_data  = COMM_WORLD.bcast(mfmc_data, root=0)
+        best_group = self.comm.bcast(best_group, root=0)
+        mfmc_data  = self.comm.bcast(mfmc_data, root=0)
 
         return best_group, mfmc_data
 

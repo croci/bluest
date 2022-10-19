@@ -45,7 +45,9 @@ def csr_to_cvxopt(A):
     return out
 
 class SAP(object):
-    def __init__(self, C, K, groups, costs):
+    def __init__(self, C, K, groups, costs, verbose=True):
+
+        self.verbose = verbose
 
         self.C = C
         self.N = C.shape[0]
@@ -138,7 +140,7 @@ class SAP(object):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
 
-        print("Integer projection...")
+        if self.verbose: print("Integer projection...")
 
         def increase_tolerance(budget, eps, fac):
             if budget is None: b = None
@@ -157,7 +159,7 @@ class SAP(object):
         # STEP 1: increase tolerances
         if np.isinf(fval):
             for i in reversed(range(4)):
-                print("WARNING! An integer solution satisfying the constraints could not be found. Increasing the tolerance/budget.\n")
+                if self.verbose: print("WARNING! An integer solution satisfying the constraints could not be found. Increasing the tolerance/budget.\n")
                 fac = 10.**-i
                 new_budget,new_eps = increase_tolerance(budget,eps,fac)
                 samples,fval = best_closest_integer_solution_BLUE(ss, self.psi, self.costs, self.e, budget=budget, eps=eps, max_samples_info=(es,rhs))
@@ -168,12 +170,12 @@ class SAP(object):
             if max_model_samples is not None and not all([np.ceil(ss)@ee <= rr for ee,rr in zip(es,rhs)]):
                 samples = np.floor(ss)
                 if samples@self.e >= 1.0:
-                    print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget. Rounding down to satisfy max model sample constraints.\n")
+                    if self.verbose: print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget. Rounding down to satisfy max model sample constraints.\n")
                 else:
                     samples = np.ceil(ss)
-                    print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget and the max model sample constraints could not be satisfied. Rounding up.\n")
+                    if self.verbose: print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget and the max model sample constraints could not be satisfied. Rounding up.\n")
             else:
-                print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget. Rounding up.\n")
+                if self.verbose: print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget. Rounding up.\n")
                 samples = np.ceil(ss)
 
         return samples.astype(int)
@@ -184,8 +186,9 @@ class SAP(object):
         if solver not in ["scipy", "cvxpy", "ipopt", "cvxopt"]:
             raise ValueError("Optimization solvers available: 'scipy', 'ipopt', 'cvxopt', or 'cvxpy'")
 
-        if eps is None: print("Minimizing statistical error for fixed cost...\n")
-        else:           print("Minimizing cost given statistical error tolerance...\n")
+        if self.verbose:
+            if eps is None: print("Minimizing statistical error for fixed cost...\n")
+            else:           print("Minimizing cost given statistical error tolerance...\n")
 
         if   solver == "cvxpy":  samples = self.cvxpy_solve(budget=budget, eps=eps, max_model_samples=max_model_samples, cvxpy_params=solver_params)
         elif solver == "cvxopt": samples = self.cvxopt_solve(budget=budget, eps=eps, max_model_samples=max_model_samples, cvxopt_params=solver_params)
@@ -268,9 +271,10 @@ class SAP(object):
             G1 = (-scales)*csr_matrix((l[-1],(l[0],l[1])), shape=((N+1)**2,L)); G1 = csr_to_cvxopt(G1)
             h1 = np.zeros((N+1,N+1)); h1[-1,0] = np.sqrt(scales)/eps; h1[0,-1] = np.sqrt(scales)/eps; h1[-1,-1] = 1; h1 = matrix(h1)
 
+        cvxopt_solver_params['show_progress'] = self.verbose
         res = solvers.sdp(c,Gl=G0,hl=h0,Gs=[G1],hs=[h1],solver=None, options=cvxopt_solver_params)
         
-        print(res)
+        if self.verbose: print(res)
 
         if budget is not None:
             m = np.maximum(np.array(res["x"]).flatten()[1:],0)
@@ -278,7 +282,7 @@ class SAP(object):
         else:
             m = np.maximum(np.array(res["x"]).flatten(),0)
 
-        print(m.round())
+        if self.verbose: print(m.round())
 
 
         return m
@@ -339,12 +343,12 @@ class SAP(object):
         #probdata, _, _ = prob.get_problem_data(cp.CVXOPT)
         #breakpoint()
 
-        #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
-        prob.solve(verbose=True, solver="CVXOPT", **cvxpy_solver_params)
+        #prob.solve(verbose=self.verbose, solver="MOSEK", mosek_params=mosek_params)
+        prob.solve(verbose=self.verbose, solver="CVXOPT", **cvxpy_solver_params)
 
         if eps is None: m.value *= budget
 
-        print(m.value.round())
+        if self.verbose: print(m.value.round())
 
         return m.value
 
@@ -362,7 +366,7 @@ class SAP(object):
 
         es,rhs = self.get_max_sample_constraints(max_model_samples)
 
-        print("Optimizing using scipy...")
+        if self.verbose: print("Optimizing using scipy...")
 
         constraint1 = Bounds(0.0*np.ones((L,)), np.inf*np.ones((L,)), keep_feasible=True)
         constraint3 = LinearConstraint(e, 1, np.inf, keep_feasible=True)
@@ -371,13 +375,13 @@ class SAP(object):
             constraint2 = LinearConstraint(w, -np.inf, budget)
 
             if x0 is None: x0 = np.ceil(10*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w)
-            res = minimize(lambda x : self.variance_GH(x,nohess=True,delta=delta)[:-1], x0, jac=True, hess=lambda x : self.variance_GH(x,delta=delta)[-1], bounds=constraint1, constraints=[constraint2,constraint3] + constraint4, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-8)
+            res = minimize(lambda x : self.variance_GH(x,nohess=True,delta=delta)[:-1], x0, jac=True, hess=lambda x : self.variance_GH(x,delta=delta)[-1], bounds=constraint1, constraints=[constraint2,constraint3] + constraint4, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3*int(self.verbose)}, tol = 1.0e-8)
 
         else:
             epsq = eps**2
             constraint2 = NonlinearConstraint(lambda x : self.variance(x,delta=delta), epsq, epsq, jac = lambda x : self.variance_GH(x,nohess=True,delta=delta)[1], hess=lambda x,p : self.variance_GH(x,delta=delta)[2]*p)
             if x0 is None: x0 = np.ceil(eps**-2*np.random.rand(L))
-            res = minimize(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=[constraint2,constraint3] + constraint4, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-10)
+            res = minimize(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=[constraint2,constraint3] + constraint4, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3*int(self.verbose)}, tol = 1.0e-10)
 
         return res.x
 
@@ -395,9 +399,9 @@ class SAP(object):
 
         es,rhs = self.get_max_sample_constraints(max_model_samples)
 
-        print("Optimizing using ipopt...")
+        if self.verbose: print("Optimizing using ipopt...")
 
-        options = {"maxiter":200, 'print_level':5, 'print_user_options' : 'yes', 'bound_relax_factor' : 1.e-30, 'honor_original_bounds' : 'yes', 'dual_inf_tol' : 1.e-5}
+        options = {"maxiter":200, 'print_level':5*int(self.verbose), 'print_user_options' : ['no','yes'][int(self.verbose)], 'bound_relax_factor' : 1.e-30, 'honor_original_bounds' : 'yes', 'dual_inf_tol' : 1.e-5}
 
         constraint1 = [(0, np.inf) for i in range(L)]
         constraint3 = {'type':'ineq', 'fun': lambda x : e@x-1, 'jac': lambda x : e, 'hess': lambda x,p : 0}
@@ -415,7 +419,7 @@ class SAP(object):
             if x0 is None: x0 = np.ceil(eps**-2*np.random.rand(L))
             res = minimize_ipopt(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hess=lambda x : np.zeros((len(x),len(x))), bounds=constraint1, constraints=[constraint2,constraint3] + constraint4, options=options, tol = 1.0e-12)
 
-        print(res.x.round())
+        if self.verbose: print(res.x.round())
 
         return res.x
 

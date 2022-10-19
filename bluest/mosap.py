@@ -14,7 +14,8 @@ def csr_to_cvxopt(A):
 
 class MOSAP(object):
     ''' MOSAP, MultiObjectiveSampleAllocationProblem '''
-    def __init__(self, C, K, Ks, groups, multi_groups, costs, multi_costs):
+    def __init__(self, C, K, Ks, groups, multi_groups, costs, multi_costs, verbose=True):
+        self.verbose = verbose
 
         self.n_outputs = len(C)
         self.C = C
@@ -32,7 +33,7 @@ class MOSAP(object):
         self.flattened_groups = flattened_groups
         self.groups = groups
 
-        self.SAPS = [SAP(C[n], Ks[n], multi_groups[n], multi_costs[n]) for n in range(self.n_outputs)]
+        self.SAPS = [SAP(C[n], Ks[n], multi_groups[n], multi_costs[n], verbose=self.verbose) for n in range(self.n_outputs)]
 
         self.sizes = [0] + [len(groupsk) for groupsk in groups]
         self.cumsizes = np.cumsum(self.sizes)
@@ -140,15 +141,16 @@ class MOSAP(object):
         idx = np.argwhere(m > tol).flatten()
         m0 = m.copy(); mlast = m.copy(); V0 = max(self.variances(m, delta=delta))
         it = 0; nullsize = -1; V = V0*1
-        print("\nSolution cleanup started!")
-        print("It %3d: Solution cleanup, L = %d, N = %d, nnz = %d, nullspace size = n/a, variance = %e." % (it, L, N, len(idx), V)) 
+        if self.verbose:
+            print("\nSolution cleanup started!")
+            print("It %3d: Solution cleanup, L = %d, N = %d, nnz = %d, nullspace size = n/a, variance = %e." % (it, L, N, len(idx), V)) 
         while len(idx) > N:
             idx = np.argwhere(m > tol).flatten()
             m[m < tol] = 0
             wr = w[idx]
             Er = E[:,idx]
 
-            if it > 0 and L >= 1000: print("It %3d: Solution cleanup, L = %d, N = %d, nnz = %d, nullspace size = %3d, variance = %e." % (it, L, N, len(idx), nullsize, V)) 
+            if it > 0 and L >= 1000 and self.verbose: print("It %3d: Solution cleanup, L = %d, N = %d, nnz = %d, nullspace size = %3d, variance = %e." % (it, L, N, len(idx), nullsize, V)) 
 
             it += 1
 
@@ -198,8 +200,9 @@ class MOSAP(object):
         idx = np.argwhere(m > tol).flatten()
         m[m < tol] = 0
         V = max(self.variances(m,delta=delta))
-        print("It %3d: Solution cleanup, L = %d, N = %d, nnz = %d, nullspace size = %3d, variance = %e." % (it, L, N, len(idx), nullsize, V)) 
-        print("Solution cleanup completed.\n") 
+        if self.verbose:
+            print("It %3d: Solution cleanup, L = %d, N = %d, nnz = %d, nullspace size = %3d, variance = %e." % (it, L, N, len(idx), nullsize, V)) 
+            print("Solution cleanup completed.\n") 
 
         return m
 
@@ -207,7 +210,7 @@ class MOSAP(object):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
 
-        print("Integer projection...")
+        if self.verbose: print("Integer projection...")
 
         def increase_tolerance(budget, eps, fac):
             if budget is None: b = None
@@ -225,14 +228,14 @@ class MOSAP(object):
 
         # STEP 1: cleanup + standard
         if np.isinf(fval):
-            print("Integer projection failed. Trying to recover by cleanup...")
+            if self.verbose: print("Integer projection failed. Trying to recover by cleanup...")
             css = self.cleanup_solution(ss)
             samples,fval = best_closest_integer_solution_BLUE_multi(css, [self.SAPS[n].psi for n in range(self.n_outputs)], self.costs, self.e, self.mappings, budget=budget, eps=eps, max_samples_info=(ES,rhs))
 
         # STEP 2: increase tolerances
         if np.isinf(fval):
             for i in reversed(range(4)):
-                print("WARNING! An integer solution satisfying the constraints could not be found. Increasing the tolerance/budget.\n")
+                if self.verbose: print("WARNING! An integer solution satisfying the constraints could not be found. Increasing the tolerance/budget.\n")
                 fac = 10.**-i
                 new_budget,new_eps = increase_tolerance(budget,eps,fac)
 
@@ -252,19 +255,19 @@ class MOSAP(object):
                 check1 = all([ ss@ees <= rr for ees,rr in zip(ES,rhs)])
                 check2 = all([css@ees <= rr for ees,rr in zip(ES,rhs)])
                 if check1:
-                    print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget. Rounding up.\n")
+                    if self.verbose: print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget. Rounding up.\n")
                     samples = ss
                 elif check2:
-                    print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget. Rounding up.\n")
+                    if self.verbose: print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget. Rounding up.\n")
                     samples = css
                 elif all([ssf[self.mappings[n]]@self.e[self.mappings[n]] >= 1 for n in range(self.n_outputs)]):
-                    print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget. Rounding down to satisfy max model sample constraints.\n")
+                    if self.verbose: print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget. Rounding down to satisfy max model sample constraints.\n")
                     samples = ssf
                 elif all([cssf[self.mappings[n]]@self.e[self.mappings[n]] >= 1 for n in range(self.n_outputs)]):
-                    print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget. Rounding down to satisfy max model sample constraints.\n")
+                    if self.verbose: print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget. Rounding down to satisfy max model sample constraints.\n")
                     samples = cssf
                 else:
-                    print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget and the max model sample constraints could not be satisfied. Rounding up.\n")
+                    if self.verbose: print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget and the max model sample constraints could not be satisfied. Rounding up.\n")
                     if eps is None:
                         if tot_cost_ss < tot_cost_css: samples = ss
                         else:                          samples = css
@@ -272,7 +275,7 @@ class MOSAP(object):
                         if var_ss < var_css: samples = ss
                         else:                samples = css
             else:
-                print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget. Rounding up.\n")
+                if self.verbose: print("WARNING! An integer solution satisfying the constraints could not be found even after increasing the tolerance/budget. Rounding up.\n")
                 if eps is None:
                     if tot_cost_ss < tot_cost_css: samples = ss
                     else:                          samples = css
@@ -288,8 +291,9 @@ class MOSAP(object):
         if solver not in ["scipy", "cvxpy", "ipopt", "cvxopt"]:
             raise ValueError("Optimization solvers available: 'scipy', 'ipopt', 'cvxopt' or 'cvxpy'")
 
-        if eps is None: print("Minimizing statistical error for fixed cost...\n")
-        else:           print("Minimizing cost given statistical error tolerance...\n")
+        if self.verbose:
+            if eps is None: print("Minimizing statistical error for fixed cost...\n")
+            else:           print("Minimizing cost given statistical error tolerance...\n")
 
         if   solver == "cvxpy":  samples = self.cvxpy_solve(budget=budget, eps=eps, max_model_samples=max_model_samples, cvxpy_params=solver_params)
         elif solver == "cvxopt": samples = self.cvxopt_solve(budget=budget, eps=eps, max_model_samples=max_model_samples, cvxopt_params=solver_params)
@@ -426,9 +430,10 @@ class MOSAP(object):
 
         Gs,hs = self.cvxopt_get_sdp_constraints(budget=budget, eps=eps)
 
+        cvxopt_solver_params['show_progress'] = self.verbose
         res = solvers.sdp(c,Gl=G0,hl=h0,Gs=Gs,hs=hs,solver=None, options=cvxopt_solver_params)
         
-        print(res)
+        if self.verbose: print(res)
 
         if budget is not None:
             m = np.maximum(np.array(res["x"]).flatten()[1:],0)
@@ -437,7 +442,7 @@ class MOSAP(object):
             m = np.maximum(np.array(res["x"]).flatten(),0)
             m *= meps**-2
 
-        print(m.round())
+        if self.verbose: print(m.round())
 
         return m
 
@@ -514,15 +519,15 @@ class MOSAP(object):
 
         #res = self.cvxpy_to_cvxopt(prob)
 
-        #prob.solve(verbose=True, solver="SCS")#, acceleration_lookback=0, acceleration_interval=0)
-        #prob.solve(verbose=True, solver="MOSEK", mosek_params=mosek_params)
-        prob.solve(verbose=True, solver="CVXOPT", **cvxpy_solver_params)
+        #prob.solve(verbose=self.verbose, solver="SCS")#, acceleration_lookback=0, acceleration_interval=0)
+        #prob.solve(verbose=self.verbose, solver="MOSEK", mosek_params=mosek_params)
+        prob.solve(verbose=self.verbose, solver="CVXOPT", **cvxpy_solver_params)
 
-        print(m.value)
+        if self.verbose: print(m.value)
         if budget is not None: m.value *= budget
         elif eps  is not None: m.value /= meps**2
 
-        print(m.value.round())
+        if self.verbose: print(m.value.round())
         return m.value
 
     def scipy_solve(self, budget=None, eps=None, x0=None, max_model_samples=None):
@@ -543,7 +548,7 @@ class MOSAP(object):
         def max_variance(m,delta=0):
             return max(self.variances(m,delta=delta))
 
-        print("Optimizing using scipy...")
+        if self.verbose: print("Optimizing using scipy...")
 
         eee = np.zeros((L+1,)); eee[0] = 1
         es = []
@@ -561,7 +566,7 @@ class MOSAP(object):
             constraint4 = [NonlinearConstraint(lambda x,nn=n : x[0] - self.SAPS[nn].variance(x[1:][mappings[nn]],delta=delta), 0, np.inf, jac = lambda x,nn=n : np.concatenate([[1],-self.SAPS[nn].variance_GH(x[1:][mappings[nn]],nohess=True,delta=delta)[1]]), hess = lambda x,p,nn=n : np.block([[0, np.zeros((1,len(x)-1))],[np.zeros((len(x)-1,1)), -self.SAPS[nn].variance_GH(x[1:][mappings[nn]],delta=delta)[2]]])*p) for n in range(No)]
 
             if x0 is None: x0 = np.ceil(budget*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w); x0 = np.concatenate([[max_variance(x0,delta=delta)], x0])
-            res = minimize(lambda x : (x[0], eee), x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=[constraint2]+constraint3+constraint4+constraint5, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3}, tol = 1.0e-15)
+            res = minimize(lambda x : (x[0], eee), x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=[constraint2]+constraint3+constraint4+constraint5, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3*int(self.verbose)}, tol = 1.0e-15)
 
         else:
             constraint1 = Bounds(0.0*np.ones((L,)), np.inf*np.ones((L,)), keep_feasible=True)
@@ -570,11 +575,11 @@ class MOSAP(object):
             epsq = eps**2
             constraint2 = [NonlinearConstraint(lambda x,n=nn : self.SAPS[n].variance(x[mappings[n]],delta=delta), -np.inf, epsq[n], jac = lambda x,n=nn : self.SAPS[n].variance_GH(x[mappings[n]],nohess=True,delta=delta)[1], hess=lambda x,p,n=nn : self.SAPS[n].variance_GH(x[mappings[n]],delta=delta)[2]*p) for nn in range(No)]
             if x0 is None: x0 = np.ceil(np.linalg.norm(eps)**-2*np.random.rand(L))
-            res = minimize(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=constraint2 + constraint3 + constraint5, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":2500, 'verbose':3}, tol = 1.0e-15)
+            res = minimize(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=constraint2 + constraint3 + constraint5, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":2500, 'verbose':3*int(self.verbose)}, tol = 1.0e-15)
 
         if budget is not None: res.x = res.x[1:]
 
-        print(res.x.round())
+        if self.verbose: print(res.x.round())
 
         return res.x
 
@@ -596,9 +601,9 @@ class MOSAP(object):
         def max_variance(m,delta=0):
             return max(self.variances(m,delta=delta))
 
-        print("Optimizing using ipopt...")
+        if self.verbose: print("Optimizing using ipopt...")
 
-        options = {"maxiter":200, 'print_level':5, 'print_user_options' : 'yes', 'bound_relax_factor' : 1.e-30, 'honor_original_bounds' : 'yes', 'dual_inf_tol' : 1.0e-1}
+        options = {"maxiter":200, 'print_level':5*int(self.verbose), 'print_user_options' : ['no', 'yes'][int(self.verbose)], 'bound_relax_factor' : 1.e-30, 'honor_original_bounds' : 'yes', 'dual_inf_tol' : 1.0e-1}
 
         eee = np.zeros((L+1,)); eee[0] = 1
         es = []
@@ -634,6 +639,6 @@ class MOSAP(object):
         if budget is not None: res.x = res.x[1:]
         elif eps is not None: res.x *= meps**-2
 
-        print(res.x.round())
+        if self.verbose: print(res.x.round())
 
         return res.x
