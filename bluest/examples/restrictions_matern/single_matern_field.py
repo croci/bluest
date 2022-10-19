@@ -21,7 +21,9 @@ def make_nested_mapping(outer_space, inner_space):
 RNG = np.random.RandomState(1234567890)
 
 class WhiteNoiseField(object):
-    def __init__(self, V):
+    def __init__(self, V, RNG=RNG):
+        self.RNG = RNG
+
         mesh = V.mesh()
         u = TrialFunction(V)
         v = TestFunction(V)
@@ -44,19 +46,19 @@ class WhiteNoiseField(object):
 
     def sample(self):
         out = Function(self.V)
-        r = RNG.randn(self.eldim, self.n_cells)
+        r = self.RNG.randn(self.eldim, self.n_cells)
         z = (self.H@r)*self.cell_volumes
         out.vector()[:] = self.L@(z.T.flatten())
         return out
 
 class MaternField(object):
-    def __init__(self, V, inner_V, parameters):
+    def __init__(self, V, inner_V, parameters, RNG=RNG):
         self.V = V
         self.inner_V = inner_V
         self.dim = V.mesh().geometry().dim()
         self.n_solves = int(np.round(parameters["nu"]/2. + self.dim/4.))
 
-        self.WN = WhiteNoiseField(V)
+        self.WN = WhiteNoiseField(V,RNG)
 
         self.parameters = self.compute_scalings(parameters)
         self.ksp = self.solver_setup()

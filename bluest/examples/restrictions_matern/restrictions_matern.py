@@ -35,7 +35,7 @@ parameters = {"lmbda"    : 0.2, # correlation length
               "lognormal_scaling" : True,
               "nu"       : 2*k-dim/2} # smoothness parameter
 
-materns = [MaternField(outer_V, inner_V, parameters) for outer_V,inner_V in zip(outer_function_spaces,function_spaces)]
+materns = [MaternField(outer_V, inner_V, parameters, RNG=RNG) for outer_V,inner_V in zip(outer_function_spaces,function_spaces)]
 
 nested_mappings = [[0 for j in range(n_levels)] for i in range(n_levels)]
 for i in range(n_levels):
@@ -106,22 +106,21 @@ class PoissonProblem(BLUEProblem):
 
 M = n_levels
 
-Nmax = 1000
-Nrestr = [2,5,10][0]
+check_all = True
+perform_variance_test = True
 
-ndofs = np.array([V.dim() for V in function_spaces])
-costs = np.concatenate([ndofs]); costs = costs/min(costs);
+Nmax = 1000
+N_variance_test = 50
+K = 5
+Nrestr_list = [2, 5, 10, 50, 100, 250, 500]
+if not perform_variance_test:
+    N_variance_test = 1
 
 C = None
 load_model_graph_full = os.path.exists("./restrictions_matern_model_data.npz")
-load_model_graph_restricted = os.path.exists("./restrictions_matern_model_data_restricted%d.npz" % Nrestr)
-load_model_graph = load_model_graph_full and load_model_graph_restricted
-if load_model_graph:
+if load_model_graph_full:
     problem = PoissonProblem(M, n_outputs=No, costs=costs, datafile="restrictions_matern_model_data.npz")
-    problem_restr = PoissonProblem(M, n_outputs=No, costs=costs, datafile="restrictions_matern_model_data_restricted%d.npz" % Nrestr, skip_projection=True)
 else:
-    problem_restr = PoissonProblem(M, n_outputs=No, C=C, costs=costs, skip_projection=True, covariance_estimation_samples=Nrestr)
-    problem_restr.save_graph_data("restrictions_matern_model_data_restricted%d.npz" % Nrestr)
     problem = PoissonProblem(M, n_outputs=No, C=C, costs=costs, covariance_estimation_samples=Nmax)
     problem.save_graph_data("restrictions_matern_model_data.npz")
 
@@ -129,8 +128,10 @@ C = problem.get_covariance()
 true_C = C.copy()
 true_dV = problem.get_mlmc_variance()
 
-Cr = problem_restr.get_covariance()
-dVr = problem_restr.get_mlmc_variance()
+ndofs = np.array([V.dim() for V in function_spaces])
+costs = np.concatenate([ndofs]); costs = costs/min(costs);
+
+deterministic_vals = np.array(problem.evaluate(list(range(M)), problem.sampler(list(range(M))))[0])
 
 def estimated():
     newC = true_C.copy()
@@ -138,14 +139,13 @@ def estimated():
     newC[:2,:] = Cr[:2,:]
     newC[:,:2] = Cr[:,:2]
     newdV[:2,:] = dVr[:2,:]
-
     return newC, newdV
 
 def extrapolated(ndiags=1):
     assert ndiags < M
 
     d = np.diag(C).copy()
-    vals = np.array(problem.evaluate(list(range(M)), problem.sampler(list(range(M))))[0])
+    vals = deterministic_vals.copy()
     valdiff = abs(vals[:-1]-vals[1:])
     m = 2*np.polyfit(np.log2(ndofs[2:][:3]), np.log2(valdiff[2:][:3]), 1)[0]
     r = (ndofs[2]/ndofs[3])**m
@@ -190,48 +190,58 @@ def extrapolated(ndiags=1):
 
     return newC,newdV
 
-check_all = True
-perform_variance_test = False
-K = 5
-eps = 1.e-2*np.sqrt(true_C[0,0])
-max_model_samples = np.inf*np.ones((M,)); max_model_samples[:2] = Nrestr
+for Nrestr in Nrestr_list:
 
-# First with no restrictions
-out_BLUE = problem.setup_solver(K=K, eps=eps, continuous_relaxation=False, max_model_samples=max_model_samples)
-out_MLMC = problem.setup_mlmc(eps=eps)
-out_MFMC = problem.setup_mfmc(eps=eps)
-printout = StringIO()
-if verbose: print("\n\n\n", "Exact full covariance with sample restrictions:\n", "BLUE: ", int(out_BLUE[1]["total_cost"]), "\n MLMC: ", int(out_MLMC[1]["total_cost"]), "\n MFMC: ", int(out_MFMC[1]["total_cost"])," ", file=printout)
-if perform_variance_test:
-    err_ex, err = problem.variance_test(N=100, K=K, eps=eps, continuous_relaxation=False, max_model_samples=max_model_samples)
-    errors = [np.array([err_ex[0], err[0]])]
+    c_list = [[] for i in range(M+2)]
+    v_list = [[] for i in range(M+2)]
 
-printouts = [printout]
-if check_all:
-    for i in range(M):
-        if verbose: print("\n\nType: ", i, "\n\n", flush=True)
-        # just assign 0 to estimated and i>0 to extrapolated
-        if i == 0:
-            newC,newdV = estimated()
-        else:
-            newC,newdV = extrapolated(i)
+    eps = 1.e-2*np.sqrt(true_C[0,0])
+    max_model_samples = np.inf*np.ones((M,)); max_model_samples[:2] = Nrestr
 
-        problem = PoissonProblem(M, C=newC, mlmc_variances=[newdV], costs=costs)
+    for nn in N_variance_Test:
+        problem_restr = PoissonProblem(M, n_outputs=No, C=C, costs=costs, skip_projection=True, covariance_estimation_samples=Nrestr)
 
-        # Then with restrictions and estimation
+        Cr = problem_restr.get_covariance()
+        dVr = problem_restr.get_mlmc_variance()
+
+        # First with exact quantities
         out_BLUE = problem.setup_solver(K=K, eps=eps, continuous_relaxation=False, max_model_samples=max_model_samples)
-        out_MLMC = problem.setup_mlmc(eps=eps)
-        printouts.append(StringIO())
-        if verbose: print("\n", "Trick of type %d:\n" % i, "BLUE: ", int(out_BLUE[1]["total_cost"]), "\n MLMC: ", int(out_MLMC[1]["total_cost"]), " ", file=printouts[-1])
+        c_list[0].append(out_BLUE[1]["total_cost"])
+
+        printout = StringIO()
+        if verbose: print("\n\n\n", "Exact full covariance with sample restrictions:\n", "BLUE: ", int(out_BLUE[1]["total_cost"]), " ", file=printout)
         if perform_variance_test:
-            err_ex, err = problem.variance_test(N=50, K=K, eps=eps, continuous_relaxation=False, max_model_samples=max_model_samples)
-            errors.append(np.array([err_ex[0],err[0]]))
+            _, err = problem.variance_test(N=N_variance_test, K=K, eps=eps, continuous_relaxation=False, max_model_samples=max_model_samples)
+            v_list[0].append(err[0])
 
-if verbose:
-    for i in range(len(printouts)):
-        print(printouts[i].getvalue()[:-2])
+        printouts = [printout]
+        if check_all:
+            for i in range(-1,M):
+                if verbose: print("\n\nType: ", i, "\n\n", flush=True)
+                # just assign 0 to estimated and i>0 to extrapolated
+                if   i == -1:
+                    newC = Cr.copy(); newdV = dVr.copy()
+                elif i == 0:
+                    newC,newdV = estimated()
+                else:
+                    newC,newdV = extrapolated(i)
 
-    if perform_variance_test:
-        errors_vec = np.vstack(errors)
-        print("\nEstimator error, theoretical vs actual:\n\n", errors, flush=True)
-        np.savez("estimator_errors%d.npz" % Nrestr, errors=errors_vec)
+                problem = PoissonProblem(M, C=newC, mlmc_variances=[newdV], costs=costs)
+
+                # Then with restrictions and estimation
+                out_BLUE = problem.setup_solver(K=K, eps=eps, continuous_relaxation=False, max_model_samples=max_model_samples)
+                c_list[i+2].append(out_BLUE[1]["total_cost"])
+
+                printouts.append(StringIO())
+                if verbose: print("\n", "Trick of type %d:\n" % i, "BLUE: ", int(out_BLUE[1]["total_cost"]), " ", file=printouts[-1])
+                if perform_variance_test:
+                    _, err = problem.variance_test(N=N_variance_test, K=K, eps=eps, continuous_relaxation=False, max_model_samples=max_model_samples)
+                    v_list[i+2].append(err[0])
+
+        if verbose:
+            for i in range(len(printouts)):
+                print(printouts[i].getvalue()[:-2])
+
+    if mpiRank == 0:
+        # NOTE: can use this later to compute expectation and std_dev of the cost and estimator variance.
+        np.savez("estimator_sample_data%d.npz" % Nrestr, c_list=c_list, v_list=v_list)
