@@ -125,7 +125,7 @@ check_all = True
 perform_variance_test = True
 
 Nmax = 1000
-N_variance_test = 2
+N_variance_test = 50
 K = 5
 Nrestr_list = [2, 5, 10, 50, 100]; Nrestr_list = [5]
 if not perform_variance_test:
@@ -236,20 +236,18 @@ for Nrestr in Nrestr_list:
             out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples)
             outputs[mode]['c_list'][0].append(out_BLUE[1]["total_cost"])
 
-            printout = StringIO()
-            if verbose: print("\n\n\n", "Exact full covariance with sample restrictions:\n", "BLUE: ", int(out_BLUE[1]["total_cost"]), " ", file=printout)
+            #printout = StringIO()
+            #if verbose: print("\n\n\n", "Exact full covariance with sample restrictions:\n", "BLUE: ", int(out_BLUE[1]["total_cost"]), " ", file=printout)
             if perform_variance_test:
                 _, err = problem.variance_test(N=N_variance_test, K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples)
                 outputs[mode]['v_list'][0].append(err[0])
 
-            printouts = [printout]
+            #printouts = [printout]
             if check_all:
-                for i in range(-1,M):
-                    if verbose: print("\n\nType: ", i, "\n\n", flush=True)
+                for i in range(M):
+                    if verbose: print("\n\nMode: %s. Sample: %d/%d " % (mode, nn+1, Ntest), "Type: ", i, "\n\n", flush=True)
                     # just assign 0 to estimated and i>0 to extrapolated
-                    if   i == -1:
-                        newC = Cr.copy(); newdV = dVr.copy()
-                    elif i == 0:
+                    if i == 0:
                         newC,newdV = estimated(Cr,dVr)
                     else:
                         newC,newdV = extrapolated(i)
@@ -258,17 +256,17 @@ for Nrestr in Nrestr_list:
 
                     # Then with restrictions and estimation
                     out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples)
-                    outputs[mode]['c_list'][i+2].append(out_BLUE[1]["total_cost"])
+                    outputs[mode]['c_list'][i+1].append(out_BLUE[1]["total_cost"])
 
-                    printouts.append(StringIO())
-                    if verbose: print("\n", "Trick of type %d:\n" % i, "BLUE: ", int(out_BLUE[1]["total_cost"]), " ", file=printouts[-1])
+                    #printouts.append(StringIO())
+                    #if verbose: print("\n", "Trick of type %d:\n" % i, "BLUE: ", int(out_BLUE[1]["total_cost"]), " ", file=printouts[-1])
                     if perform_variance_test:
                         _, err = problem.variance_test(N=N_variance_test, K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples)
-                        outputs[mode]['v_list'][i+2].append(err[0])
+                        outputs[mode]['v_list'][i+1].append(err[0])
 
-            if verbose:
-                for i in range(len(printouts)):
-                    print(printouts[i].getvalue()[:-2])
+            #if verbose:
+            #    for i in range(len(printouts)):
+            #        print(printouts[i].getvalue()[:-2])
 
     # NOTE each subcomm now sends their results to mpiRank 0
     if subrank == 0:
@@ -277,7 +275,7 @@ for Nrestr in Nrestr_list:
     if mpiRank == 0:
         for ii in range(ncolors):
             for mode in ["eps", "budget"]:
-                for i in range(M+2):
+                for i in range(M+1):
                     outputs[mode]['c_list'][i].append(coloroutputs[ii][mode]['c_list'][i])
                     outputs[mode]['v_list'][i].append(coloroutputs[ii][mode]['v_list'][i])
 
