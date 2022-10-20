@@ -7,6 +7,7 @@ import sys
 import os
 from io import StringIO
 from single_matern_field import MaternField,make_nested_mapping
+from cvxpy.error import SolverError
 
 set_log_level(30)
 
@@ -123,10 +124,11 @@ M = n_levels
 
 check_all = True
 perform_variance_test = True
+global_verbose = False
 
 Nmax = 1000
 N_variance_test = 50
-K = 5
+K = 4
 Nrestr_list = [2, 5, 10, 50, 100]; Nrestr_list = [5]
 if not perform_variance_test:
     N_variance_test = 1
@@ -138,9 +140,9 @@ costs = np.concatenate([ndofs]); costs = costs/min(costs);
 
 load_model_graph_full = os.path.exists("./restrictions_matern_model_data.npz")
 if load_model_graph_full:
-    problem = PoissonProblem(M, n_outputs=No, costs=costs, datafile="restrictions_matern_model_data.npz", verbose=False)
+    problem = PoissonProblem(M, n_outputs=No, costs=costs, datafile="restrictions_matern_model_data.npz", verbose=global_verbose)
 else:
-    problem = PoissonProblem(M, n_outputs=No, C=C, costs=costs, covariance_estimation_samples=Nmax, verbose=False)
+    problem = PoissonProblem(M, n_outputs=No, C=C, costs=costs, covariance_estimation_samples=Nmax, verbose=global_verbose)
     problem.save_graph_data("restrictions_matern_model_data.npz")
 
 C = problem.get_covariance()
@@ -221,16 +223,51 @@ for Nrestr in Nrestr_list:
     #FIXME: do it by hand in parallel
     Ntest = int(np.ceil(N_variance_test/ncolors))
 
+    problem_restr = [0 for nn in range(Ntest)]
+    if verbose: print("\n\nQUICK RUN!\n\n", flush=True)
     for nn in range(Ntest):
-        problem_restr = PoissonProblem(M, n_outputs=No, C=None, costs=costs, skip_projection=True, covariance_estimation_samples=Nrestr, comm=subcomm, verbose=False)
+        problem_restr[nn] = PoissonProblem(M, n_outputs=No, C=None, costs=costs, skip_projection=True, covariance_estimation_samples=Nrestr, comm=subcomm, verbose=global_verbose)
 
-        Cr = problem_restr.get_covariance()
-        dVr = problem_restr.get_mlmc_variance()
+        Cr = problem_restr[nn].get_covariance()
+        dVr = problem_restr[nn].get_mlmc_variance()
 
         for mode in ["eps", "budget"]:
 
             if   mode == "eps":    eps    = EPS*1; budget = None
             elif mode == "budget": budget = BUDGET*1; eps = None
+
+            if verbose: print("\n\nMode: %s. Sample: %d/%d " % (mode, nn+1, Ntest), "Type: start", "\n\n", flush=True)
+
+            # First with exact quantities
+            out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples)
+
+            if check_all:
+                for i in range(1,M):
+                    if verbose: print("\n\nMode: %s. Sample: %d/%d " % (mode, nn+1, Ntest), "Type: ", i, "\n\n", flush=True)
+                    # just assign 0 to estimated and i>0 to extrapolated
+                    if i == 0:
+                        newC,newdV = estimated(Cr,dVr)
+                    else:
+                        newC,newdV = extrapolated(i)
+
+                    problem = PoissonProblem(M, C=newC, mlmc_variances=[newdV], costs=costs, comm=subcomm, verbose=global_verbose)
+
+                    # Then with restrictions and estimation
+                    out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples)
+
+    comm.barrier()
+
+    if verbose: print("\n\nSLOW RUN!\n\n", flush=True)
+    for nn in range(Ntest):
+        Cr = problem_restr[nn].get_covariance()
+        dVr = problem_restr[nn].get_mlmc_variance()
+
+        for mode in ["eps", "budget"]:
+
+            if   mode == "eps":    eps    = EPS*1; budget = None
+            elif mode == "budget": budget = BUDGET*1; eps = None
+
+            if verbose: print("\n\nMode: %s. Sample: %d/%d " % (mode, nn+1, Ntest), "Type: start", "\n\n", flush=True)
 
             # First with exact quantities
             out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples)
@@ -244,7 +281,7 @@ for Nrestr in Nrestr_list:
 
             #printouts = [printout]
             if check_all:
-                for i in range(M):
+                for i in range(1,M):
                     if verbose: print("\n\nMode: %s. Sample: %d/%d " % (mode, nn+1, Ntest), "Type: ", i, "\n\n", flush=True)
                     # just assign 0 to estimated and i>0 to extrapolated
                     if i == 0:
@@ -252,17 +289,17 @@ for Nrestr in Nrestr_list:
                     else:
                         newC,newdV = extrapolated(i)
 
-                    problem = PoissonProblem(M, C=newC, mlmc_variances=[newdV], costs=costs, comm=subcomm, verbose=False)
+                    problem = PoissonProblem(M, C=newC, mlmc_variances=[newdV], costs=costs, comm=subcomm, verbose=global_verbose)
 
                     # Then with restrictions and estimation
                     out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples)
-                    outputs[mode]['c_list'][i+1].append(out_BLUE[1]["total_cost"])
+                    outputs[mode]['c_list'][i].append(out_BLUE[1]["total_cost"])
 
                     #printouts.append(StringIO())
                     #if verbose: print("\n", "Trick of type %d:\n" % i, "BLUE: ", int(out_BLUE[1]["total_cost"]), " ", file=printouts[-1])
                     if perform_variance_test:
                         _, err = problem.variance_test(N=N_variance_test, K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples)
-                        outputs[mode]['v_list'][i+1].append(err[0])
+                        outputs[mode]['v_list'][i].append(err[0])
 
             #if verbose:
             #    for i in range(len(printouts)):
@@ -275,7 +312,7 @@ for Nrestr in Nrestr_list:
     if mpiRank == 0:
         for ii in range(ncolors):
             for mode in ["eps", "budget"]:
-                for i in range(M+1):
+                for i in range(M):
                     outputs[mode]['c_list'][i].append(coloroutputs[ii][mode]['c_list'][i])
                     outputs[mode]['v_list'][i].append(coloroutputs[ii][mode]['v_list'][i])
 
