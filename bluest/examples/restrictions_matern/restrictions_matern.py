@@ -270,10 +270,10 @@ for Nrestr in Nrestr_list:
                             else:
                                 newC,newdV = extrapolated(i)
 
-                            problem = PoissonProblem(M, C=newC, mlmc_variances=[newdV], costs=costs, comm=subcomm, verbose=global_verbose)
+                            problem_i = PoissonProblem(M, C=newC, mlmc_variances=[newdV], costs=costs, comm=subcomm, verbose=global_verbose)
 
                             # Then with restrictions and estimation
-                            out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
+                            out_BLUE = problem_i.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
 
                 check = False
 
@@ -320,16 +320,16 @@ for Nrestr in Nrestr_list:
                     else:
                         newC,newdV = extrapolated(i)
 
-                    problem = PoissonProblem(M, C=newC, mlmc_variances=[newdV], costs=costs, comm=subcomm, verbose=global_verbose)
+                    problem_i = PoissonProblem(M, C=newC, mlmc_variances=[newdV], costs=costs, comm=subcomm, verbose=global_verbose)
 
                     # Then with restrictions and estimation
-                    out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
+                    out_BLUE = problem_i.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
                     outputs[mode]['c_list'][i+1].append(out_BLUE[1]["total_cost"])
 
                     #printouts.append(StringIO())
                     #if verbose: print("\n", "Trick of type %d:\n" % i, "BLUE: ", int(out_BLUE[1]["total_cost"]), " ", file=printouts[-1])
                     if perform_variance_test:
-                        _, err = problem.variance_test(N=N_variance_test, K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
+                        _, err = problem_i.variance_test(N=N_variance_test, K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
                         outputs[mode]['v_list'][i+1].append(err[0])
 
             #if verbose:
