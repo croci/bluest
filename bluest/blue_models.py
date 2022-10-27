@@ -3,7 +3,7 @@ import networkx as nx
 from itertools import combinations
 from mpi4py.MPI import COMM_WORLD
 from .blue_fn import blue_fn
-from .mosap import MOSAP
+from .mosap import MOSAP,BLUESTError
 from .misc import attempt_mlmc_setup,attempt_mfmc_setup
 from .layered_network_graph import LayeredNetworkGraph
 from .spg import spg
@@ -531,18 +531,24 @@ class BLUEProblem(object):
         if self.mpiRank == 0:
             self.MOSAP = MOSAP(C, K, Ks, groups, multi_groups, costs, multi_costs, verbose=self.verbose)
             self.MOSAP.solve(eps=eps, budget=budget, solver=solver, continuous_relaxation=continuous_relaxation, max_model_samples=max_model_samples, solver_params=optimization_solver_params)
-            Vs = self.MOSAP.variances(self.MOSAP.samples)
+            #NOTE: this is just to avoid a deadlock
+            if self.MOSAP.samples is None:
+                self.MOSAP_output = None
+            else:
+                Vs = self.MOSAP.variances(self.MOSAP.samples)
 
-            cost_BLUE = self.MOSAP.tot_cost
-            N_MC = max(C[n][0,0]/Vs[n] for n in range(self.n_outputs))
-            cost_MC = N_MC*costs[0] 
-            if self.verbose: print("\nBLUE cost: ", cost_BLUE, "MC cost: ", cost_MC, "Savings: ", cost_MC/cost_BLUE)
+                cost_BLUE = self.MOSAP.tot_cost
+                N_MC = max(C[n][0,0]/Vs[n] for n in range(self.n_outputs))
+                cost_MC = N_MC*costs[0] 
+                if self.verbose: print("\nBLUE cost: ", cost_BLUE, "MC cost: ", cost_MC, "Savings: ", cost_MC/cost_BLUE)
 
-            self.MOSAP_output = {'budget' : budget, 'eps' : eps, 'samples' : self.MOSAP.samples, 'flattened_groups' : self.MOSAP.flattened_groups, 'variances' : Vs, 'cost' : cost_BLUE}
+                self.MOSAP_output = {'budget' : budget, 'eps' : eps, 'samples' : self.MOSAP.samples, 'flattened_groups' : self.MOSAP.flattened_groups, 'variances' : Vs, 'cost' : cost_BLUE}
         else:
             self.MOSAP_output = None
 
         self.MOSAP_output = self.comm.bcast(self.MOSAP_output, root=0)
+        if self.MOSAP_output is None:
+            raise BLUESTError("MOSAP solution failed!")
 
         # FIXME: flattened groups will be the union between all the possible groups selected above
         which_groups = [self.MOSAP_output['flattened_groups'][item] for item in np.argwhere(self.MOSAP_output['samples'] > 0).flatten()]

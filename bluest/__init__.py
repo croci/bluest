@@ -6,5 +6,5 @@ __email__      = 'matteo.croci@austin.utexas.edu'
 
 from .blue_fn import blue_fn
 from .sap import SAP
-from .mosap import MOSAP
+from .mosap import MOSAP,BLUESTError
 from .blue_models import BLUEProblem

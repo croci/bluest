@@ -195,6 +195,10 @@ class SAP(object):
         elif solver == "scipy":  samples = self.scipy_solve(budget=budget, eps=eps, x0=x0, max_model_samples=max_model_samples)
         elif solver == "ipopt":  samples = self.ipopt_solve(budget=budget, eps=eps, x0=x0, max_model_samples=max_model_samples)
 
+        if samples is None:
+            self.samples = None
+            return None
+
         if not continuous_relaxation:
             samples = self.integer_projection(samples, budget=budget, eps=eps, max_model_samples=max_model_samples)
 
@@ -272,7 +276,12 @@ class SAP(object):
             h1 = np.zeros((N+1,N+1)); h1[-1,0] = np.sqrt(scales)/eps; h1[0,-1] = np.sqrt(scales)/eps; h1[-1,-1] = 1; h1 = matrix(h1)
 
         cvxopt_solver_params['show_progress'] = self.verbose
-        res = solvers.sdp(c,Gl=G0,hl=h0,Gs=[G1],hs=[h1],solver=None, options=cvxopt_solver_params)
+        try: res = solvers.sdp(c,Gl=G0,hl=h0,Gs=[G1],hs=[h1],solver=None, options=cvxopt_solver_params)
+        except ZeroDivisionError:
+            return None
+
+        if res["x"] is None:
+            return None
         
         if self.verbose: print(res)
 
@@ -344,7 +353,12 @@ class SAP(object):
         #breakpoint()
 
         #prob.solve(verbose=self.verbose, solver="MOSEK", mosek_params=mosek_params)
-        prob.solve(verbose=self.verbose, solver="CVXOPT", **cvxpy_solver_params)
+        try: prob.solve(verbose=self.verbose, solver="CVXOPT", **cvxpy_solver_params)
+        except (cp.SolverError,ZeroDivisionError):
+            return None
+
+        if m.value is None:
+            return None
 
         if eps is None: m.value *= budget
 

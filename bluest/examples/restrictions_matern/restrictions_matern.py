@@ -8,6 +8,7 @@ import os
 from io import StringIO
 from single_matern_field import MaternField,make_nested_mapping
 from cvxpy.error import SolverError
+from mpi4py.MPI import PROD as MPIPROD
 
 set_log_level(30)
 
@@ -93,11 +94,15 @@ def compute_solution(V, sample):
     return sol
 
 class PoissonProblem(BLUEProblem):
-    def sampler(self, ls, N=1):
+    def sampler(self, ls, N=1, mean=False):
         L = len(ls)
         lmin = min(ls)
         sample_gauss = RNG.randn(3)/4
         sample = materns[lmin].sample()
+        if mean:
+            sample_gauss *= 0
+            sample.vector()[:] = 1.0
+
         samples = []
         for i in range(L):
             if ls[i] == lmin: samples.append([sample] + list(sample_gauss.copy()))
@@ -128,6 +133,7 @@ class PoissonProblem(BLUEProblem):
 
 M = n_levels
 
+slow_run = True
 check_all = True
 perform_variance_test = True
 global_verbose = False
@@ -135,7 +141,7 @@ global_verbose = False
 Nmax = 1000
 N_variance_test = 50
 K = 4
-Nrestr_list = [2, 5, 10, 50, 100]; Nrestr_list = [5]
+Nrestr_list = [5, 10, 25, 50, 100]
 if not perform_variance_test:
     N_variance_test = 1
 
@@ -155,20 +161,19 @@ C = problem.get_covariance()
 true_C = C.copy()
 true_dV = problem.get_mlmc_variance()
 
-deterministic_vals = np.array(problem.evaluate(list(range(M)), problem.sampler(list(range(M))))[0])
+deterministic_vals = np.array(problem.evaluate(list(range(M)), problem.sampler(list(range(M)), mean=True))[0])
 
-def estimated(Cr,dVr):
-    newC = true_C.copy()
-    newdV = true_dV.copy()
-    newC[:2,:] = Cr[:2,:]
-    newC[:,:2] = Cr[:,:2]
-    newdV[:2,:] = dVr[:2,:]
+def estimated(Nrestr, Nmax, Cex, dVex, Cr, dVr):
+    newC = Cr.copy()
+    newdV = dVr.copy()
+    newC[2:,2:] = (newC[2:,2:]*Nrestr + Nmax*Cex[2:,2:])/(Nrestr + Nmax)
+    newdV[2:,:] = (newdV[2:,:]*Nrestr + Nmax*dVex[2:,:])/(Nrestr + Nmax)
     return newC, newdV
 
-def extrapolated(ndiags=1):
+def extrapolated(Cex,dVex,ndiags=1):
     assert ndiags < M
 
-    d = np.diag(C).copy()
+    d = np.diag(Cex).copy()
     vals = deterministic_vals.copy()
     valdiff = abs(vals[:-1]-vals[1:])
     m = 2*np.polyfit(np.log2(ndofs[2:][:3]), np.log2(valdiff[2:][:3]), 1)[0]
@@ -177,8 +182,8 @@ def extrapolated(ndiags=1):
     r = (ndofs[1]/ndofs[2])**m
     v0 = (r*v1-d[2])/(r-1)
 
-    newC = true_C.copy()
-    newdV = true_dV.copy()
+    newC = Cex.copy()
+    newdV = dVex.copy()
 
     newC[0,0] = v0
     newC[1,1] = v1
@@ -195,7 +200,7 @@ def extrapolated(ndiags=1):
             newC[i,0] = newC[0,i]
             newC[i+1,1] = newC[1,i+1]
         else:
-            delv = true_dV[2:4,i]
+            delv = dVex[2:4,i]
             r1 = (ndofs[2]/ndofs[3])**m
             r0 = (ndofs[1]/ndofs[2])**m
             newdV[1,i] = (r1*delv[0] - delv[1])/(r1-1)
@@ -215,29 +220,46 @@ def extrapolated(ndiags=1):
     return newC,newdV
 
 
+cost_ratio1 = sum(costs)/sum(costs[2:])
+cost_ratio2 = sum(costs[:2])/sum(costs[2:])
+
 #FIXME: the extrapolated version is deterministic so need to parallelise variance_test
 #FIXME: looking at the output something is odd with the output of one of the processors
 for Nrestr in Nrestr_list:
 
+    if verbose: print("\n\nNrestr: ", Nrestr, "\n\n", flush=True)
+
+    comm.barrier()
+
+    Nmax = int(np.ceil(cost_ratio1*Nrestr - cost_ratio2))
+
     assert Nrestr%mpiBlockSize == 0
 
-    out_eps = {"c_list" : [[] for i in range(M+2)], "v_list" : [[] for i in range(M+2)]}
-    out_bud = {"c_list" : [[] for i in range(M+2)], "v_list" : [[] for i in range(M+2)]}
+    out_eps = {"c_list" : [[] for i in range(M+1)], "v_list" : [[] for i in range(M+1)]}
+    out_bud = {"c_list" : [[] for i in range(M+1)], "v_list" : [[] for i in range(M+1)]}
     outputs = {"eps" : out_eps, "budget" : out_bud}
 
-    EPS = 5.e-3*np.sqrt(true_C[0,0]); BUDGET = 4*Nrestr*sum(costs[:2])
+    EPS = 0.0018621360085025829 # roughly 5e-3*np.sqrt(true_C[0,0])
+    BUDGET = 2*Nrestr*sum(costs)
+    if verbose: print("\n\n EPS: ", EPS, " BUDGET: ", BUDGET, "\n\n", flush=True)
     max_model_samples = np.inf*np.ones((M,)); max_model_samples[:2] = Nrestr;
 
     #FIXME: do it by hand in parallel
     Ntest = int(np.ceil(N_variance_test/ncolors))
 
-    Cr_list  = [0 for nn in range(Ntest)]
-    dVr_list = [0 for nn in range(Ntest)]
+    Cex_list  = [0 for nn in range(Ntest)]
+    dVex_list = [0 for nn in range(Ntest)]
+    Cr_list   = [0 for nn in range(Ntest)]
+    dVr_list  = [0 for nn in range(Ntest)]
     if verbose: print("\n\nQUICK RUN!\n\n", flush=True)
     for nn in range(Ntest):
         check = True
         while check:
             try:
+                problem = PoissonProblem(M, n_outputs=No, C=None, costs=costs, comm=subcomm, covariance_estimation_samples=Nmax, verbose=global_verbose)
+                Cex_list[nn] = problem.get_covariance().copy()
+                dVex_list[nn] = problem.get_mlmc_variance().copy()
+
                 problem_restr = PoissonProblem(M, n_outputs=No, C=None, costs=costs, skip_projection=True, covariance_estimation_samples=Nrestr, comm=subcomm, verbose=global_verbose)
 
                 Cr_list[nn]  = problem_restr.get_covariance().copy()
@@ -245,6 +267,9 @@ for Nrestr in Nrestr_list:
 
                 Cr = Cr_list[nn].copy()
                 dVr = dVr_list[nn].copy()
+
+                Cex = Cex_list[nn].copy()
+                dVex = dVex_list[nn].copy()
 
                 for mode in ["eps", "budget"]:
 
@@ -255,20 +280,20 @@ for Nrestr in Nrestr_list:
                         budget = BUDGET*1; eps = None
                         optimization_solver_params = {'feastol':1.0e-4}
 
-                    if verbose: print("\n\nMode: %s. Sample: %d/%d " % (mode, nn+1, Ntest), "Type: start", "\n\n", flush=True)
+                    if verbose: print("\n\nRank: %d, Mode: %s. Sample: %d/%d " % (mpiRank, mode, nn+1, Ntest), "Type: start", "\n\n", flush=True)
 
                     # First with exact quantities
+                    problem = PoissonProblem(M, n_outputs=No, C=Cex, mlmc_variances=[dVex], costs=costs, comm=subcomm, verbose=global_verbose)
                     out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
 
                     if check_all:
                         for i in range(M):
-                            if verbose: print("\n\nMode: %s. Sample: %d/%d " % (mode, nn+1, Ntest), "Type: ", i, "\n\n", flush=True)
+                            if verbose: print("\n\nRank: %d, Mode: %s. Sample: %d/%d " % (mpiRank, mode, nn+1, Ntest), "Type: ", i, "\n\n", flush=True)
                             # just assign 0 to estimated and i>0 to extrapolated
                             if i == 0:
-                                #newC,newdV = estimated(Cr,dVr)
                                 newC,newdV = Cr,dVr
                             else:
-                                newC,newdV = extrapolated(i)
+                                newC,newdV = extrapolated(Cex, dVex, i)
 
                             problem_i = PoissonProblem(M, C=newC, mlmc_variances=[newdV], costs=costs, comm=subcomm, verbose=global_verbose)
 
@@ -276,76 +301,83 @@ for Nrestr in Nrestr_list:
                             out_BLUE = problem_i.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
 
                 check = False
+                #check = not bool(subcomm.allreduce(not check, op=MPIPROD))
 
-            except Exception:
-                print("\n\nERROR!\n\n", flush=True)
+            except BLUESTError:
+                if subrank == 0: print("\n\nRank: %d, ERROR!\n\n" % mpiRank, flush=True)
+                #check = True
+                #check = not bool(subcomm.allreduce(not check, op=MPIPROD))
 
     comm.barrier()
 
-    if verbose: print("\n\nSLOW RUN!\n\n", flush=True)
-    for nn in range(Ntest):
-        Cr = Cr_list[nn].copy()
-        dVr = dVr_list[nn].copy()
+    if slow_run:
+        if verbose: print("\n\nSLOW RUN!\n\n", flush=True)
+        for nn in range(Ntest):
+            Cr = Cr_list[nn].copy()
+            dVr = dVr_list[nn].copy()
 
-        for mode in ["eps", "budget"]:
+            Cex = Cex_list[nn].copy()
+            dVex = dVex_list[nn].copy()
 
-            if   mode == "eps":
-                eps    = EPS*1; budget = None
-                optimization_solver_params = None
-            elif mode == "budget":
-                budget = BUDGET*1; eps = None
-                optimization_solver_params = {'feastol':1.0e-4}
-
-            if verbose: print("\n\nMode: %s. Sample: %d/%d " % (mode, nn+1, Ntest), "Type: start", "\n\n", flush=True)
-
-            # First with exact quantities
-            out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
-
-            outputs[mode]['c_list'][0].append(out_BLUE[1]["total_cost"])
-
-            #printout = StringIO()
-            #if verbose: print("\n\n\n", "Exact full covariance with sample restrictions:\n", "BLUE: ", int(out_BLUE[1]["total_cost"]), " ", file=printout)
-            if perform_variance_test:
-                _, err = problem.variance_test(N=N_variance_test, K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
-                outputs[mode]['v_list'][0].append(err[0])
-
-            #printouts = [printout]
-            if check_all:
-                for i in range(M):
-                    if verbose: print("\n\nMode: %s. Sample: %d/%d " % (mode, nn+1, Ntest), "Type: ", i, "\n\n", flush=True)
-                    # just assign 0 to estimated and i>0 to extrapolated
-                    if i == 0:
-                        #newC,newdV = estimated(Cr,dVr)
-                        newC,newdV = Cr,dVr
-                    else:
-                        newC,newdV = extrapolated(i)
-
-                    problem_i = PoissonProblem(M, C=newC, mlmc_variances=[newdV], costs=costs, comm=subcomm, verbose=global_verbose)
-
-                    # Then with restrictions and estimation
-                    out_BLUE = problem_i.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
-                    outputs[mode]['c_list'][i+1].append(out_BLUE[1]["total_cost"])
-
-                    #printouts.append(StringIO())
-                    #if verbose: print("\n", "Trick of type %d:\n" % i, "BLUE: ", int(out_BLUE[1]["total_cost"]), " ", file=printouts[-1])
-                    if perform_variance_test:
-                        _, err = problem_i.variance_test(N=N_variance_test, K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
-                        outputs[mode]['v_list'][i+1].append(err[0])
-
-            #if verbose:
-            #    for i in range(len(printouts)):
-            #        print(printouts[i].getvalue()[:-2])
-
-    # NOTE each subcomm now sends their results to mpiRank 0
-    if subrank == 0:
-        coloroutputs = intracomm.gather(outputs, root=0)
-
-    if mpiRank == 0:
-        for ii in range(1,ncolors):
             for mode in ["eps", "budget"]:
-                for i in range(M+1):
-                    outputs[mode]['c_list'][i] += coloroutputs[ii][mode]['c_list'][i]
-                    outputs[mode]['v_list'][i] += coloroutputs[ii][mode]['v_list'][i]
 
-        # NOTE: can use this later to compute expectation and std_dev of the cost and estimator variance.
-        np.savez("estimator_sample_data%d.npz" % Nrestr, **outputs)
+                if   mode == "eps":
+                    eps    = EPS*1; budget = None
+                    optimization_solver_params = None
+                elif mode == "budget":
+                    budget = BUDGET*1; eps = None
+                    optimization_solver_params = {'feastol':1.0e-4}
+
+                if verbose: print("\n\nMode: %s. Sample: %d/%d " % (mode, nn+1, Ntest), "Type: start", "\n\n", flush=True)
+
+                # First with exact quantities
+                problem = PoissonProblem(M, n_outputs=No, C=Cex, mlmc_variances=[dVex], costs=costs, comm=subcomm, verbose=global_verbose)
+                out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
+
+                outputs[mode]['c_list'][0].append(out_BLUE[1]["total_cost"])
+
+                #printout = StringIO()
+                #if verbose: print("\n\n\n", "Exact full covariance with sample restrictions:\n", "BLUE: ", int(out_BLUE[1]["total_cost"]), " ", file=printout)
+                if perform_variance_test:
+                    _, err = problem.variance_test(N=N_variance_test, K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
+                    outputs[mode]['v_list'][0].append(err[0])
+
+                #printouts = [printout]
+                if check_all:
+                    for i in range(M):
+                        if verbose: print("\n\nMode: %s. Sample: %d/%d " % (mode, nn+1, Ntest), "Type: ", i, "\n\n", flush=True)
+                        # just assign 0 to estimated and i>0 to extrapolated
+                        if i == 0:
+                            newC,newdV = Cr,dVr
+                        else:
+                            newC,newdV = extrapolated(Cex, dVex, i)
+
+                        problem_i = PoissonProblem(M, C=newC, mlmc_variances=[newdV], costs=costs, comm=subcomm, verbose=global_verbose)
+
+                        # Then with restrictions and estimation
+                        out_BLUE = problem_i.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
+                        outputs[mode]['c_list'][i+1].append(out_BLUE[1]["total_cost"])
+
+                        #printouts.append(StringIO())
+                        #if verbose: print("\n", "Trick of type %d:\n" % i, "BLUE: ", int(out_BLUE[1]["total_cost"]), " ", file=printouts[-1])
+                        if perform_variance_test:
+                            _, err = problem_i.variance_test(N=N_variance_test, K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
+                            outputs[mode]['v_list'][i+1].append(err[0])
+
+                #if verbose:
+                #    for i in range(len(printouts)):
+                #        print(printouts[i].getvalue()[:-2])
+
+        # NOTE each subcomm now sends their results to mpiRank 0
+        if subrank == 0:
+            coloroutputs = intracomm.gather(outputs, root=0)
+
+        if mpiRank == 0:
+            for ii in range(1,ncolors):
+                for mode in ["eps", "budget"]:
+                    for i in range(M+1):
+                        outputs[mode]['c_list'][i] += coloroutputs[ii][mode]['c_list'][i]
+                        outputs[mode]['v_list'][i] += coloroutputs[ii][mode]['v_list'][i]
+
+            # NOTE: can use this later to compute expectation and std_dev of the cost and estimator variance.
+            np.savez("estimator_sample_data%d.npz" % Nrestr, **outputs)

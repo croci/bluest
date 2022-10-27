@@ -12,6 +12,9 @@ def csr_to_cvxopt(A):
     out = spmatrix(l[-1],l[0],l[1], A.shape)
     return out
 
+class BLUESTError(RuntimeError):
+    pass
+
 class MOSAP(object):
     ''' MOSAP, MultiObjectiveSampleAllocationProblem '''
     def __init__(self, C, K, Ks, groups, multi_groups, costs, multi_costs, verbose=True):
@@ -299,6 +302,10 @@ class MOSAP(object):
         elif solver == "cvxopt": samples = self.cvxopt_solve(budget=budget, eps=eps, max_model_samples=max_model_samples, cvxopt_params=solver_params)
         elif solver == "ipopt":  samples = self.ipopt_solve(budget=budget, eps=eps, x0=x0, max_model_samples=max_model_samples)
         elif solver == "scipy":  samples = self.scipy_solve(budget=budget, eps=eps, x0=x0, max_model_samples=max_model_samples)
+        
+        if samples is None:
+            self.samples = None
+            return None
 
         if not continuous_relaxation:
             samples = self.integer_projection(samples, budget=budget, eps=eps, max_model_samples=max_model_samples)
@@ -431,7 +438,12 @@ class MOSAP(object):
         Gs,hs = self.cvxopt_get_sdp_constraints(budget=budget, eps=eps)
 
         cvxopt_solver_params['show_progress'] = self.verbose
-        res = solvers.sdp(c,Gl=G0,hl=h0,Gs=Gs,hs=hs,solver=None, options=cvxopt_solver_params)
+        try: res = solvers.sdp(c,Gl=G0,hl=h0,Gs=Gs,hs=hs,solver=None, options=cvxopt_solver_params)
+        except ZeroDivisionError:
+            return None
+
+        if res["x"] is None:
+            return None
         
         if self.verbose: print(res)
 
@@ -521,7 +533,12 @@ class MOSAP(object):
 
         #prob.solve(verbose=self.verbose, solver="SCS")#, acceleration_lookback=0, acceleration_interval=0)
         #prob.solve(verbose=self.verbose, solver="MOSEK", mosek_params=mosek_params)
-        prob.solve(verbose=self.verbose, solver="CVXOPT", **cvxpy_solver_params)
+        try: prob.solve(verbose=self.verbose, solver="CVXOPT", **cvxpy_solver_params)
+        except (cp.SolverError,ZeroDivisionError):
+            return None
+
+        if m.value is None:
+            return None
 
         if self.verbose: print(m.value)
         if budget is not None: m.value *= budget
