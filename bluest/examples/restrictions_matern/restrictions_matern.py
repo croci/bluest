@@ -250,16 +250,15 @@ for Nrestr in Nrestr_list:
 
                     if   mode == "eps":
                         eps    = EPS*1; budget = None
+                        optimization_solver_params = None
                     elif mode == "budget":
                         budget = BUDGET*1; eps = None
+                        optimization_solver_params = {'feastol':1.0e-4}
 
                     if verbose: print("\n\nMode: %s. Sample: %d/%d " % (mode, nn+1, Ntest), "Type: start", "\n\n", flush=True)
 
                     # First with exact quantities
-                    if budget is None:
-                        out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt")
-                    else:
-                        out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params={'feastol':1.0e-4})
+                    out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
 
                     if check_all:
                         for i in range(M):
@@ -274,10 +273,7 @@ for Nrestr in Nrestr_list:
                             problem = PoissonProblem(M, C=newC, mlmc_variances=[newdV], costs=costs, comm=subcomm, verbose=global_verbose)
 
                             # Then with restrictions and estimation
-                            if budget is None:
-                                out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt")
-                            else:
-                                out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params={'feastol':1.0e-4})
+                            out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
 
                 check = False
 
@@ -295,19 +291,22 @@ for Nrestr in Nrestr_list:
 
             if   mode == "eps":
                 eps    = EPS*1; budget = None
+                optimization_solver_params = None
             elif mode == "budget":
                 budget = BUDGET*1; eps = None
+                optimization_solver_params = {'feastol':1.0e-4}
 
             if verbose: print("\n\nMode: %s. Sample: %d/%d " % (mode, nn+1, Ntest), "Type: start", "\n\n", flush=True)
 
             # First with exact quantities
-            out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples)
+            out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
+
             outputs[mode]['c_list'][0].append(out_BLUE[1]["total_cost"])
 
             #printout = StringIO()
             #if verbose: print("\n\n\n", "Exact full covariance with sample restrictions:\n", "BLUE: ", int(out_BLUE[1]["total_cost"]), " ", file=printout)
             if perform_variance_test:
-                _, err = problem.variance_test(N=N_variance_test, K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples)
+                _, err = problem.variance_test(N=N_variance_test, K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
                 outputs[mode]['v_list'][0].append(err[0])
 
             #printouts = [printout]
@@ -316,20 +315,21 @@ for Nrestr in Nrestr_list:
                     if verbose: print("\n\nMode: %s. Sample: %d/%d " % (mode, nn+1, Ntest), "Type: ", i, "\n\n", flush=True)
                     # just assign 0 to estimated and i>0 to extrapolated
                     if i == 0:
-                        newC,newdV = estimated(Cr,dVr)
+                        #newC,newdV = estimated(Cr,dVr)
+                        newC,newdV = Cr,dVr
                     else:
                         newC,newdV = extrapolated(i)
 
                     problem = PoissonProblem(M, C=newC, mlmc_variances=[newdV], costs=costs, comm=subcomm, verbose=global_verbose)
 
                     # Then with restrictions and estimation
-                    out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples)
+                    out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
                     outputs[mode]['c_list'][i+1].append(out_BLUE[1]["total_cost"])
 
                     #printouts.append(StringIO())
                     #if verbose: print("\n", "Trick of type %d:\n" % i, "BLUE: ", int(out_BLUE[1]["total_cost"]), " ", file=printouts[-1])
                     if perform_variance_test:
-                        _, err = problem.variance_test(N=N_variance_test, K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples)
+                        _, err = problem.variance_test(N=N_variance_test, K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
                         outputs[mode]['v_list'][i+1].append(err[0])
 
             #if verbose:

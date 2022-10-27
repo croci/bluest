@@ -875,13 +875,15 @@ class BLUEProblem(object):
         err_ex = np.sqrt(self.MOSAP_output['variances'])
         err = np.zeros_like(err_ex)
 
+        kwargs.pop('verbose', None)
+
         inners = self.get_models_inner_products()
 
         s1 = [0 for n in range(self.n_outputs)]
         s2 = np.zeros_like(err_ex)
         for it in range(1,N+1):
             if self.verbose: print("Sampling estimator %d/%d" % (it,N), flush=True)
-            mus,_,_ = self.solve(verbose=False)
+            mus,_,_ = self.solve(K=K, budget=budget, eps=eps, verbose=False, **kwargs)
             for n in range(self.n_outputs):
                 s1[n] += mus[n]
                 s2[n] += inners[n](mus[n],mus[n])
