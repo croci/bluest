@@ -308,7 +308,11 @@ class MOSAP(object):
             return None
 
         if not continuous_relaxation:
-            samples = self.integer_projection(samples, budget=budget, eps=eps, max_model_samples=max_model_samples)
+            try: samples = self.integer_projection(samples, budget=budget, eps=eps, max_model_samples=max_model_samples)
+            except AssertionError as e:
+                print(str(e))
+                self.samples = None
+                return None
 
         self.samples = samples
         self.budget = budget

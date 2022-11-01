@@ -11,6 +11,7 @@ from .spg import spg
 spg_default_params = {"maxit" : 10000,
                       "maxfc" : 10000**2,
                       "verbose" : False,
+                      "spd_threshold" : 5.0e-14,
                       "eps"     : 1.0e-10,
                       "lmbda_min" : 10.**-30,
                       "lmbda_max" : 10.**30,
@@ -374,9 +375,8 @@ class BLUEProblem(object):
 
     def project_covariance(self, n=0, bypass_error_check=False):
 
-        spd_eps = 5e-14
-
         spg_params = self.params["spg_params"]
+        spd_eps = spg_params["spd_threshold"]
 
         # the covariance will have NaNs corresponding to entries that cannot be coupled
         C = self.get_covariance(n).flatten()
@@ -396,7 +396,7 @@ class BLUEProblem(object):
 
         def am(C,mask):
             X = C.copy()
-            X[abs(mask) < 1.0e-14] = 0
+            X[abs(mask) < 1.0e-15] = 0
             return X*mask
 
         def evalf(x):

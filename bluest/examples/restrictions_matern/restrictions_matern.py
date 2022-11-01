@@ -16,7 +16,7 @@ comm = MPI.comm_world
 mpiRank = MPI.rank(comm)
 mpiSize = MPI.size(comm)
 
-mpiBlockSize = 5
+mpiBlockSize = 2
 if mpiSize%mpiBlockSize == 0:
     color = mpiRank%(mpiSize//mpiBlockSize)
     ncolors = mpiSize//mpiBlockSize
@@ -140,8 +140,9 @@ global_verbose = False
 
 Nmax = 1000
 N_variance_test = 50
+maxdiag = 3
 K = 4
-Nrestr_list = [5, 10, 25, 50, 100]
+Nrestr_list = [2, 4, 8, 16]
 if not perform_variance_test:
     N_variance_test = 1
 
@@ -231,16 +232,18 @@ for Nrestr in Nrestr_list:
 
     comm.barrier()
 
-    Nmax = int(np.ceil(cost_ratio1*Nrestr - cost_ratio2))
+    #Nmax = int(np.ceil(cost_ratio1*Nrestr - cost_ratio2))
+    Nmax = 32
 
     assert Nrestr%mpiBlockSize == 0
 
-    out_eps = {"c_list" : [[] for i in range(M+1)], "v_list" : [[] for i in range(M+1)]}
-    out_bud = {"c_list" : [[] for i in range(M+1)], "v_list" : [[] for i in range(M+1)]}
+    out_eps = {"c_list" : [[] for i in range(maxdiag+1)], "v_list" : [[] for i in range(maxdiag+1)]}
+    out_bud = {"c_list" : [[] for i in range(maxdiag+1)], "v_list" : [[] for i in range(maxdiag+1)]}
     outputs = {"eps" : out_eps, "budget" : out_bud}
 
     EPS = 0.0018621360085025829 # roughly 5e-3*np.sqrt(true_C[0,0])
-    BUDGET = 2*Nrestr*sum(costs)
+    BUDGET = 4*32*sum(costs)
+    #BUDGET = 2*Nrestr*sum(costs)
     if verbose: print("\n\n EPS: ", EPS, " BUDGET: ", BUDGET, "\n\n", flush=True)
     max_model_samples = np.inf*np.ones((M,)); max_model_samples[:2] = Nrestr;
 
@@ -287,15 +290,18 @@ for Nrestr in Nrestr_list:
                     out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
 
                     if check_all:
-                        for i in range(M):
+                        for i in range(maxdiag + 1):
                             if verbose: print("\n\nRank: %d, Mode: %s. Sample: %d/%d " % (mpiRank, mode, nn+1, Ntest), "Type: ", i, "\n\n", flush=True)
                             # just assign 0 to estimated and i>0 to extrapolated
                             if i == 0:
+                                #newC,newdV = estimated(Nrestr, Nmax, Cex, dVex, Cr, dVr)
                                 newC,newdV = Cr,dVr
                             else:
                                 newC,newdV = extrapolated(Cex, dVex, i)
 
-                            problem_i = PoissonProblem(M, C=newC, mlmc_variances=[newdV], costs=costs, comm=subcomm, verbose=global_verbose)
+                            if Nrestr < M: spd_eps = 1.e-12
+                            else:          spd_eps = 5.e-14
+                            problem_i = PoissonProblem(M, C=newC, mlmc_variances=[newdV], costs=costs, comm=subcomm, verbose=global_verbose, spg_params={"spd_threshold":spd_eps})
 
                             # Then with restrictions and estimation
                             out_BLUE = problem_i.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
@@ -344,15 +350,18 @@ for Nrestr in Nrestr_list:
 
                 #printouts = [printout]
                 if check_all:
-                    for i in range(M):
-                        if verbose: print("\n\nMode: %s. Sample: %d/%d " % (mode, nn+1, Ntest), "Type: ", i, "\n\n", flush=True)
+                    for i in range(maxdiag+1):
+                        if verbose:maxdiagprint("\n\nMode: %s. Sample: %d/%d " % (mode, nn+1, Ntest), "Type: ", i, "\n\n", flush=True)
                         # just assign 0 to estimated and i>0 to extrapolated
                         if i == 0:
+                            #newC,newdV = estimated(Nrestr, Nmax, Cex, dVex, Cr, dVr)
                             newC,newdV = Cr,dVr
                         else:
                             newC,newdV = extrapolated(Cex, dVex, i)
 
-                        problem_i = PoissonProblem(M, C=newC, mlmc_variances=[newdV], costs=costs, comm=subcomm, verbose=global_verbose)
+                        if Nrestr < M: spd_eps = 1.e-12
+                        else:          spd_eps = 5.e-14
+                        problem_i = PoissonProblem(M, C=newC, mlmc_variances=[newdV], costs=costs, comm=subcomm, verbose=global_verbose, spg_params={"spd_threshold":spd_eps})
 
                         # Then with restrictions and estimation
                         out_BLUE = problem_i.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
@@ -375,7 +384,7 @@ for Nrestr in Nrestr_list:
         if mpiRank == 0:
             for ii in range(1,ncolors):
                 for mode in ["eps", "budget"]:
-                    for i in range(M+1):
+                    for i in range(maxdiag+1):
                         outputs[mode]['c_list'][i] += coloroutputs[ii][mode]['c_list'][i]
                         outputs[mode]['v_list'][i] += coloroutputs[ii][mode]['v_list'][i]
 
