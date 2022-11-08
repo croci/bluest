@@ -16,7 +16,7 @@ comm = MPI.comm_world
 mpiRank = MPI.rank(comm)
 mpiSize = MPI.size(comm)
 
-mpiBlockSize = 2
+mpiBlockSize = 4
 if mpiSize%mpiBlockSize == 0:
     color = mpiRank%(mpiSize//mpiBlockSize)
     ncolors = mpiSize//mpiBlockSize
@@ -237,8 +237,8 @@ for Nrestr in Nrestr_list:
 
     assert Nrestr%mpiBlockSize == 0
 
-    out_eps = {"c_list" : [[] for i in range(maxdiag+1)], "v_list" : [[] for i in range(maxdiag+1)]}
-    out_bud = {"c_list" : [[] for i in range(maxdiag+1)], "v_list" : [[] for i in range(maxdiag+1)]}
+    out_eps = {"c_list" : [[] for i in range(maxdiag+2)], "v_list" : [[] for i in range(maxdiag+2)]}
+    out_bud = {"c_list" : [[] for i in range(maxdiag+2)], "v_list" : [[] for i in range(maxdiag+2)]}
     outputs = {"eps" : out_eps, "budget" : out_bud}
 
     EPS = 0.0018621360085025829 # roughly 5e-3*np.sqrt(true_C[0,0])
@@ -351,7 +351,7 @@ for Nrestr in Nrestr_list:
                 #printouts = [printout]
                 if check_all:
                     for i in range(maxdiag+1):
-                        if verbose:maxdiagprint("\n\nMode: %s. Sample: %d/%d " % (mode, nn+1, Ntest), "Type: ", i, "\n\n", flush=True)
+                        if verbose: print("\n\nMode: %s. Sample: %d/%d " % (mode, nn+1, Ntest), "Type: ", i, "\n\n", flush=True)
                         # just assign 0 to estimated and i>0 to extrapolated
                         if i == 0:
                             #newC,newdV = estimated(Nrestr, Nmax, Cex, dVex, Cr, dVr)
@@ -384,7 +384,7 @@ for Nrestr in Nrestr_list:
         if mpiRank == 0:
             for ii in range(1,ncolors):
                 for mode in ["eps", "budget"]:
-                    for i in range(maxdiag+1):
+                    for i in range(maxdiag+2):
                         outputs[mode]['c_list'][i] += coloroutputs[ii][mode]['c_list'][i]
                         outputs[mode]['v_list'][i] += coloroutputs[ii][mode]['v_list'][i]
 
