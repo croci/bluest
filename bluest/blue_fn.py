@@ -4,6 +4,7 @@ from numpy import zeros, array, isfinite, ndarray, savez_compressed, load
 from numpy.random import RandomState
 from numpy import sum as npsum
 from time import time
+from inspect import signature
 from shutil import get_terminal_size
 from mpi4py.MPI import COMM_WORLD, SUM
 import os
@@ -83,7 +84,7 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
 
     if sampler is None:
         RNG = RandomState(1+mpiRank)
-        def sampler(ls, N):
+        def sampler(ls, N=1):
             sample = RNG.randn(N)
             return [sample for i in range(L)]
 
@@ -107,12 +108,16 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
     NN[0]  += N%nprocs
     NN     += [0 for i in range(mpiSize - nprocs)]
 
+    nobatch = len(signature(sampler).parameters) == 1
+    if nobatch: N1 = 1
+
     for it in range(1, NN[mpiRank]+1, N1):
         N2 = min(N1, NN[mpiRank] - it + 1)
 
         isfinite = False
         while not isfinite:
-            samples = sampler(ls, N2)
+            if nobatch: samples = sampler(ls)
+            else:       samples = sampler(ls, N2)
 
             start = time()
             Ps = problem.evaluate(ls, samples) 

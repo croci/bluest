@@ -1,6 +1,6 @@
 from bluest import *
 import numpy as np
-from dolfin import set_log_level, MPI, LogLevel
+from dolfin import set_log_level, MPI, LogLevel, File
 from NS import build_space, solve_stokes, solve_navier_stokes, postprocess
 import sys
 
@@ -42,6 +42,9 @@ for N_bulk in [64, 32, 16]:
             W, bndry, ds_circle1, ds_circle2 = build_space(N_circle1, N_circle2, N_bulk, comm=MPI.comm_self)
             model_data.append({"W" : W, "bndry" : bndry, "ds_circle1" : ds_circle1, "ds_circle2" : ds_circle2})
             if verbose: print("Model %d loaded." % len(model_data))
+            if mpiSize == 1:
+                File("./meshes/NS_%d_%d_%d.pvd" % (N_bulk, N_circle1, N_circle2)) << W.mesh()
+
 
 M = len(model_data) # should be 12
 
@@ -121,8 +124,8 @@ if __name__ == "__main__":
         for i in range(2):
             for solver in ["cvxpy", "ipopt"]:
                 tic = time()
-                if i == 0: out = problem.setup_solver(K=K, budget=budget, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-3, 'abstol':1e-5, 'reltol':1e-2})[1]
-                else:      out = problem.setup_solver(K=K, eps=eps, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-7})[1]
+                if i == 0: out = problem.setup_solver(K=K, budget=budget, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-3, 'abstol':1e-5, 'reltol':1e-2})
+                else:      out = problem.setup_solver(K=K, eps=eps, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-7})
                 toc = time() - tic
                 out = np.array([max(out['errors']), out['total_cost'], toc])
                 OUT[i].append(out)
@@ -140,8 +143,8 @@ if __name__ == "__main__":
     out_MFMC = problem.setup_mfmc(budget=budget, eps=eps)
 
     print("\n\n\n", out_BLUE, "\n\n", out_MLMC, "\n\n", out_MFMC)
-    print("\n\n\n", out_BLUE[1]["total_cost"], "\n", out_MLMC[1]["total_cost"], "\n", out_MFMC[1]["total_cost"])
-    np.savez("samples.npz",samples=out_BLUE[1]["samples"])
+    print("\n\n\n", out_BLUE["total_cost"], "\n", out_MLMC["total_cost"], "\n", out_MFMC["total_cost"])
+    np.savez("samples.npz",samples=out_BLUE["samples"])
 
     #out = problem.solve()
     #if verbose: print(out)

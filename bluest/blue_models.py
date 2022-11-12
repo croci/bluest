@@ -553,11 +553,11 @@ class BLUEProblem(object):
         # FIXME: flattened groups will be the union between all the possible groups selected above
         which_groups = [self.MOSAP_output['flattened_groups'][item] for item in np.argwhere(self.MOSAP_output['samples'] > 0).flatten()]
         Vs = self.MOSAP_output['variances']; cost_BLUE = self.MOSAP_output['cost']
-        blue_data = {"samples" : self.MOSAP_output['samples'], "errors" : np.sqrt(Vs), "total_cost" : cost_BLUE}
+        blue_data = {"models": which_groups, "samples" : self.MOSAP_output['samples'], "errors" : np.sqrt(Vs), "total_cost" : cost_BLUE}
         if self.verbose: print("\nModel groups selected: %s\n" % which_groups)
         if self.verbose: print("BLUE estimator setup. Max error: ", np.sqrt(max(Vs)), " Cost: ", cost_BLUE, "\n")
 
-        return which_groups, blue_data
+        return blue_data
 
     def solve(self, K=3, budget=None, eps=None, groups=None, multi_groups=None, solver=None, verbose=True, continuous_relaxation=False, max_model_samples=None, optimization_solver_params=None):
         if solver is None: solver = self.params["optimization_solver"]
@@ -689,16 +689,14 @@ class BLUEProblem(object):
 
             errs = [np.sqrt(mlmc_data["variance"](samples)) for mlmc_data in best_data]
 
-            mlmc_data = {"samples" : samples, "errors" : errs, "total_cost" : cost}
+            mlmc_data = {"models" : best_group, "samples" : samples, "errors" : errs, "total_cost" : cost}
             if self.verbose: print("Best MLMC estimator found. Coupled models:", best_group, " Max error: ", max(errs), " Cost: ", cost, "\n")
         else:
-            best_group = None
             mlmc_data = None
 
-        best_group = self.comm.bcast(best_group, root=0)
         mlmc_data = self.comm.bcast(mlmc_data, root=0)
 
-        return best_group, mlmc_data
+        return mlmc_data
 
     def solve_mlmc(self, budget=None, eps=None, continuous_relaxation=False):
         if budget is None and eps is None:
@@ -706,11 +704,12 @@ class BLUEProblem(object):
         elif budget is not None and eps is not None:
             eps = None
 
-        best_group, mlmc_data = self.setup_mlmc(budget=budget, eps=eps, continuous_relaxation=continuous_relaxation)
+        mlmc_data = self.setup_mlmc(budget=budget, eps=eps, continuous_relaxation=continuous_relaxation)
 
-        samples  = mlmc_data["samples"]
-        errs      = mlmc_data["errors"]
-        tot_cost = mlmc_data["total_cost"]
+        best_group = mlmc_data["models"]
+        samples    = mlmc_data["samples"]
+        errs       = mlmc_data["errors"]
+        tot_cost   = mlmc_data["total_cost"]
 
         if self.verbose: print("\nSampling optimal MLMC estimator...\n")
 
@@ -782,16 +781,14 @@ class BLUEProblem(object):
             errs = [np.sqrt(mfmc_data["variance"](samples)) for mfmc_data in best_data]
 
             alphas = [mfmc_data["alphas"] for mfmc_data in best_data]
-            mfmc_data = {"samples" : samples, "errors" : errs, "total_cost" : cost, "alphas" : alphas}
+            mfmc_data = {"models" : best_group, "samples" : samples, "errors" : errs, "total_cost" : cost, "alphas" : alphas}
             if self.verbose: print("Best MFMC estimator found. Coupled models:", best_group, " Max error: ", max(errs), " Cost: ", cost, "\n")
         else:
-            best_group = None
             mfmc_data = None
 
-        best_group = self.comm.bcast(best_group, root=0)
         mfmc_data  = self.comm.bcast(mfmc_data, root=0)
 
-        return best_group, mfmc_data
+        return mfmc_data
 
     def solve_mfmc(self, budget=None, eps=None, continuous_relaxation=False):
         if budget is None and eps is None:
@@ -799,12 +796,13 @@ class BLUEProblem(object):
         elif budget is not None and eps is not None:
             eps = None
 
-        best_group, mfmc_data = self.setup_mfmc(budget=budget, eps=eps, continuous_relaxation=continuous_relaxation)
+        mfmc_data = self.setup_mfmc(budget=budget, eps=eps, continuous_relaxation=continuous_relaxation)
 
-        samples  = mfmc_data["samples"]
-        errs     = mfmc_data["errors"]
-        tot_cost = mfmc_data["total_cost"]
-        alphas   = mfmc_data["alphas"]
+        best_group = mfmc_data["models"]
+        samples    = mfmc_data["samples"]
+        errs       = mfmc_data["errors"]
+        tot_cost   = mfmc_data["total_cost"]
+        alphas     = mfmc_data["alphas"]
 
         if self.verbose: print("\nSampling optimal MFMC estimator...\n")
 

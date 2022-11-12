@@ -428,8 +428,8 @@ if __name__ == '__main__':
             for i in range(2):
                 for solver in ["cvxopt", "ipopt"]:
                     tic = time()
-                    if i == 0: out = problem.setup_solver(K=K, budget=budget, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-7, 'abstol':1e-6, 'reltol':1e-3})[1]
-                    else:      out = problem.setup_solver(K=K, eps=eps, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-7, 'abstol':1e-6, 'reltol':1e-3})[1]
+                    if i == 0: out = problem.setup_solver(K=K, budget=budget, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-7, 'abstol':1e-6, 'reltol':1e-3})
+                    else:      out = problem.setup_solver(K=K, eps=eps, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-7, 'abstol':1e-6, 'reltol':1e-3})
                     toc = time() - tic
                     out = np.array([max(out['errors']), out['total_cost'], toc])
                     OUT[i].append(out)
@@ -449,5 +449,5 @@ if __name__ == '__main__':
         out_MFMC = problem.setup_mfmc(eps=eps, budget=budget)
 
         print("\n\n\n", out_BLUE, "\n\n", out_MLMC, "\n\n", out_MFMC)
-        print("\n\n\n", out_BLUE[1]["total_cost"], "\n", out_MLMC[1]["total_cost"], "\n", out_MFMC[1]["total_cost"])
+        print("\n\n\n", out_BLUE["total_cost"], "\n", out_MLMC["total_cost"], "\n", out_MFMC["total_cost"])
         if not no_Na_curr: np.savez("samples.npz",samples=out_BLUE[1]["samples"])

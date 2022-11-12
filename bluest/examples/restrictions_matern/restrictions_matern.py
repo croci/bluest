@@ -340,10 +340,10 @@ for Nrestr in Nrestr_list:
                 problem = PoissonProblem(M, n_outputs=No, C=Cex, mlmc_variances=[dVex], costs=costs, comm=subcomm, verbose=global_verbose)
                 out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
 
-                outputs[mode]['c_list'][0].append(out_BLUE[1]["total_cost"])
+                outputs[mode]['c_list'][0].append(out_BLUE["total_cost"])
 
                 #printout = StringIO()
-                #if verbose: print("\n\n\n", "Exact full covariance with sample restrictions:\n", "BLUE: ", int(out_BLUE[1]["total_cost"]), " ", file=printout)
+                #if verbose: print("\n\n\n", "Exact full covariance with sample restrictions:\n", "BLUE: ", int(out_BLUE["total_cost"]), " ", file=printout)
                 if perform_variance_test:
                     _, err = problem.variance_test(N=N_variance_test, K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
                     outputs[mode]['v_list'][0].append(err[0])
@@ -365,10 +365,10 @@ for Nrestr in Nrestr_list:
 
                         # Then with restrictions and estimation
                         out_BLUE = problem_i.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
-                        outputs[mode]['c_list'][i+1].append(out_BLUE[1]["total_cost"])
+                        outputs[mode]['c_list'][i+1].append(out_BLUE["total_cost"])
 
                         #printouts.append(StringIO())
-                        #if verbose: print("\n", "Trick of type %d:\n" % i, "BLUE: ", int(out_BLUE[1]["total_cost"]), " ", file=printouts[-1])
+                        #if verbose: print("\n", "Trick of type %d:\n" % i, "BLUE: ", int(out_BLUE["total_cost"]), " ", file=printouts[-1])
                         if perform_variance_test:
                             _, err = problem_i.variance_test(N=N_variance_test, K=K, eps=eps, budget=budget, continuous_relaxation=False, max_model_samples=max_model_samples, solver="cvxopt", optimization_solver_params=optimization_solver_params)
                             outputs[mode]['v_list'][i+1].append(err[0])

@@ -143,9 +143,9 @@ if comparison_test:
     out_MFMC = problem.setup_mfmc(budget=budget, eps=eps)
     out      = problem.setup_solver(K=M, budget=budget, eps=eps, solver="cvxpy")
 
-    if verbose: print("\nMLMC. Errors: %s. Total cost: %f." % (out_MLMC[1]["errors"], out_MLMC[1]["total_cost"]))
-    if verbose: print("MFMC. Errors: %s. Total cost: %f." % (out_MFMC[1]["errors"], out_MFMC[1]["total_cost"]))
-    if verbose: print("BLUE. Errors: %s. Total cost: %f.\n\n" % (out[1]["errors"],      out[1]["total_cost"]))
+    if verbose: print("\nMLMC. Errors: %s. Total cost: %f." % (out_MLMC["errors"], out_MLMC["total_cost"]))
+    if verbose: print("MFMC. Errors: %s. Total cost: %f." % (out_MFMC["errors"], out_MFMC["total_cost"]))
+    if verbose: print("BLUE. Errors: %s. Total cost: %f.\n\n" % (out["errors"],      out["total_cost"]))
 
     eps    = 0.25;  budget = None
 
@@ -153,9 +153,9 @@ if comparison_test:
     out_MFMC = problem.setup_mfmc(budget=budget, eps=eps)
     out      = problem.setup_solver(K=M, budget=budget, eps=eps, solver="cvxpy")
 
-    if verbose: print("\nMLMC. Errors: %s. Total cost: %f." % (out_MLMC[1]["errors"], out_MLMC[1]["total_cost"]))
-    if verbose: print("MFMC. Errors: %s. Total cost: %f." % (out_MFMC[1]["errors"], out_MFMC[1]["total_cost"]))
-    if verbose: print("BLUE. Errors: %s. Total cost: %f." % (out[1]["errors"],      out[1]["total_cost"]))
+    if verbose: print("\nMLMC. Errors: %s. Total cost: %f." % (out_MLMC["errors"], out_MLMC["total_cost"]))
+    if verbose: print("MFMC. Errors: %s. Total cost: %f." % (out_MFMC["errors"], out_MFMC["total_cost"]))
+    if verbose: print("BLUE. Errors: %s. Total cost: %f." % (out["errors"],      out["total_cost"]))
 
     sys.exit(0)
 
@@ -169,17 +169,17 @@ if solver_test:
     K = 3; eps = 0.01; budget = 1000.
 
     out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
-    out_cvxopt = problem.setup_solver(K=K, budget=budget, solver="cvxopt", optimization_solver_params={'feastol':1.e-5})[1]
-    out_cvxpy  = problem.setup_solver(K=K, budget=budget, solver="cvxpy", optimization_solver_params={'feastol':1.e-5})[1]
-    out_ipopt  = problem.setup_solver(K=K, budget=budget, solver="ipopt")[1]
-    out_scipy  = problem.setup_solver(K=K, budget=budget, solver="scipy")[1]
+    out_cvxopt = problem.setup_solver(K=K, budget=budget, solver="cvxopt", optimization_solver_params={'feastol':1.e-5})
+    out_cvxpy  = problem.setup_solver(K=K, budget=budget, solver="cvxpy", optimization_solver_params={'feastol':1.e-5})
+    out_ipopt  = problem.setup_solver(K=K, budget=budget, solver="ipopt")
+    out_scipy  = problem.setup_solver(K=K, budget=budget, solver="scipy")
     out1 = (out_cvxpy, out_cvxopt, out_ipopt, out_scipy); [out.pop('samples') for out in out1 if out is not None]
 
     out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
-    out_cvxopt = problem.setup_solver(K=K, eps=eps, solver="cvxopt", optimization_solver_params={'feastol':1.e-7})[1]
-    out_cvxpy  = problem.setup_solver(K=K, eps=eps, solver="cvxpy", optimization_solver_params={'feastol':1.e-7})[1]
-    out_ipopt  = problem.setup_solver(K=K, eps=eps, solver="ipopt")[1]
-    out_scipy  = problem.setup_solver(K=K, eps=eps, solver="scipy")[1]
+    out_cvxopt = problem.setup_solver(K=K, eps=eps, solver="cvxopt", optimization_solver_params={'feastol':1.e-7})
+    out_cvxpy  = problem.setup_solver(K=K, eps=eps, solver="cvxpy", optimization_solver_params={'feastol':1.e-7})
+    out_ipopt  = problem.setup_solver(K=K, eps=eps, solver="ipopt")
+    out_scipy  = problem.setup_solver(K=K, eps=eps, solver="scipy")
     out2 = (out_cvxpy, out_cvxopt, out_ipopt, out_scipy); [out.pop('samples') for out in out2 if out is not None]
     
     print(out1, "\n", out2)
