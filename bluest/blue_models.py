@@ -22,7 +22,7 @@ default_params = {
                     "verbose" : True,
                     "comm" : COMM_WORLD,
                     "remove_uncorrelated" : True,
-                    "optimization_solver" : "cvxpy",
+                    "optimization_solver" : "cvxopt",
                     "covariance_estimation_samples" : 100,
                     "sample_batch_size": 1,
                     "samplefile" : None,
@@ -34,7 +34,7 @@ default_params = {
 def is_subclique(G,nodelist):
     H = G.subgraph(nodelist)
     n = len(nodelist)
-    return H.size() == (n*(n-1))//2
+    return H.size() == (n*(n+1))//2
 
 def next_divisible_number(x, n):
     return n*(x//n + int(x%n > 0))
@@ -75,18 +75,22 @@ class BLUEProblem(object):
         self.verbose = self.params["verbose"] and self.warning
 
         if C is None: C = [np.nan*np.ones((M,M)) for n in range(n_outputs)]
+        if mlmc_variances is None:
+            dV = [np.nan*np.ones((M,M)) for n in range(n_outputs)]
+        else:
+            dV = mlmc_variances
 
         if datafile is not None:
             self.load_graph_data(datafile, costs)
             self.check_costs(warning=True) # Sending a warning just in case
         else:
-            if not isinstance(C,(list,tuple)): C = [C]
+            if not isinstance(C, (list,tuple)):  C = [C]
+            if not isinstance(dV,(list,tuple)): dV = [dV]
 
             self.G = [self.get_model_graph(C[n], costs=costs) for n in range(n_outputs)]
             self.SG = [list(range(M)) for n in range(n_outputs)]
 
-            if mlmc_variances is None: self.dV = [np.nan*np.ones((M,M)) for n in range(n_outputs)]
-            else: self.dV = mlmc_variances
+            self.dV = dV
 
             if costs is None: self.estimate_costs(self.get_comm().Get_size())
             self.check_costs(warning=True) # Sending a warning just in case
@@ -422,7 +426,7 @@ class BLUEProblem(object):
 
                 if res["spginfo"] == 0:
                     if self.verbose: print("Covariance projected, projection error: ", err)
-                    if err > 1.0e-10 and self.verbose and not bypass_error_check:
+                    if err > spg_params["eps"] and self.verbose and not bypass_error_check:
                         print("\n\n++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
                         print("\nWARNING! Large covariance projection error. Model covariance may be singular. Consider removing one model.")
                         print("Leaving covariances as they are. To bypass: run problem.project_variances(bypass_error_check=True) before setting up UQ solver.\n")
@@ -469,13 +473,13 @@ class BLUEProblem(object):
     def blue_fn(self, ls, N, verbose=True, compute_mlmc_differences=False):
         return blue_fn(ls, N, self, sampler=self.sampler, inners=self.get_models_inner_products(), comm = self.get_comm(), N1=self.params["sample_batch_size"], No=self.n_outputs, compute_mlmc_differences=compute_mlmc_differences, verbose=self.verbose and verbose, filename=self.params["samplefile"], outputs_to_save=self.params["outputs_to_save"])
 
-    def setup_solver(self, K=3, budget=None, eps=None, groups=None, multi_groups=None, solver=None, continuous_relaxation=False, max_model_samples=None, optimization_solver_params=None):
+    def setup_solver(self, K=4, budget=None, eps=None, groups=None, multi_groups=None, solver=None, continuous_relaxation=False, max_model_samples=None, optimization_solver_params=None):
         if budget is None and eps is None: raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None: eps = None
         if eps is not None and isinstance(eps,(int,float,np.int,np.float)): eps = [eps for n in range(self.n_outputs)]
         if solver is None: solver=self.params["optimization_solver"]
-        if multi_groups is not None and len(multi_groups) != self.M:
-            raise ValueError("multi_groups must be a list of groupings of the same length as the number of models.")
+        if multi_groups is not None and len(multi_groups) != self.n_outputs:
+            raise ValueError("multi_groups must be a list of groupings of the same length as the number of outputs.")
         if groups is not None and multi_groups is None:
             multi_groups = [groups for n in range(self.n_outputs)]
 
@@ -503,14 +507,15 @@ class BLUEProblem(object):
             Ks = [min(max(len(item) for item in groups), self.M) for groups in multi_groups]
             for n in range(self.n_outputs):
                 groups = multi_groups[n]
-                new_groups = [[] for k in range(Ks[i])]
+                new_groups = [[] for k in range(Ks[n])]
                 for group in groups:
+                    group.sort()
                     if is_subclique(self.G[n], group) and all(node in self.SG[n] for node in group):
                         new_groups[len(group)-1].append(group)
 
                 multi_groups[n] = new_groups
 
-            Ks = [min(max(len(item) for item in groups), self.M) for groups in multi_groups]
+            Ks = [min(max(len(item) for groupsk in groups for item in groupsk), self.M) for groups in multi_groups]
             K  = max(Ks)
 
         groups = [[] for k in range(K)]
@@ -553,13 +558,14 @@ class BLUEProblem(object):
         # FIXME: flattened groups will be the union between all the possible groups selected above
         which_groups = [self.MOSAP_output['flattened_groups'][item] for item in np.argwhere(self.MOSAP_output['samples'] > 0).flatten()]
         Vs = self.MOSAP_output['variances']; cost_BLUE = self.MOSAP_output['cost']
-        blue_data = {"models": which_groups, "samples" : self.MOSAP_output['samples'], "errors" : np.sqrt(Vs), "total_cost" : cost_BLUE}
+        samples = self.MOSAP_output['samples']; samples = samples[samples > 0].copy()
+        blue_data = {"models": which_groups, "samples" : samples, "errors" : np.sqrt(Vs), "total_cost" : cost_BLUE}
         if self.verbose: print("\nModel groups selected: %s\n" % which_groups)
         if self.verbose: print("BLUE estimator setup. Max error: ", np.sqrt(max(Vs)), " Cost: ", cost_BLUE, "\n")
 
         return blue_data
 
-    def solve(self, K=3, budget=None, eps=None, groups=None, multi_groups=None, solver=None, verbose=True, continuous_relaxation=False, max_model_samples=None, optimization_solver_params=None):
+    def solve(self, K=4, budget=None, eps=None, groups=None, multi_groups=None, solver=None, verbose=True, continuous_relaxation=False, max_model_samples=None, optimization_solver_params=None):
         if solver is None: solver = self.params["optimization_solver"]
         if self.MOSAP_output is None:
             self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, multi_groups=multi_groups, solver=solver, continuous_relaxation=continuous_relaxation, max_model_samples=max_model_samples, optimization_solver_params=optimization_solver_params)

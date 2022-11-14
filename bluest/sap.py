@@ -64,13 +64,14 @@ class SAP(object):
         for k in range(1, K+1):
             groupsk = groups[k-1]
             for i in range(len(groupsk)):
-                idx = np.array([groupsk[i]])
+                idx = np.array([groupsk[i]], dtype=np.int64)
                 index = (idx.T, idx)
                 invcovs[k-1].append(np.linalg.pinv(C[index]))
                 flattened_groups.append(groupsk[i])
 
-            groups[k-1] = np.array(groups[k-1])
-            invcovs[k-1] = np.vstack(invcovs[k-1]).flatten()
+            groups[k-1] = np.array(groups[k-1], dtype=np.int64)
+            if len(invcovs[k-1]) > 0: invcovs[k-1] = np.vstack(invcovs[k-1]).flatten()
+            else: invcovs[k-1] = np.array([])
 
         self.sizes            = sizes
         self.groups           = groups
@@ -120,7 +121,7 @@ class SAP(object):
         sizes    = self.sizes
         cumsizes = self.cumsizes
 
-        self.psi = np.hstack([assemble_psi(N,k,sizes[k],groups[k-1],invcovs[k-1]) for k in range(1,K+1)])
+        self.psi = np.hstack([assemble_psi(N,k,sizes[k],groups[k-1],invcovs[k-1]) for k in range(1,K+1) if len(groups[k-1]) > 0])
 
         def get_phi(m, delta=0):
             return get_phi_full(m, self.psi, delta=delta)

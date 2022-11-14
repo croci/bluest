@@ -31,7 +31,7 @@ class MOSAP(object):
         flattened_groups = []
         for k in range(K):
             flattened_groups += groups[k]
-            groups[k] = np.array(groups[k])
+            groups[k] = np.array(groups[k],dtype=np.int64)
 
         self.flattened_groups = flattened_groups
         self.groups = groups
@@ -48,7 +48,7 @@ class MOSAP(object):
             for group in groupsk:
                 for i in range(self.N):
                     ES[i].append(int(i in group))
-        self.ES = [np.array(es) for es in ES]
+        self.ES = [np.array(es, dtype=np.int64) for es in ES]
         self.e = self.ES[0]
 
         mappings = [[[] for k in range(Ks[n])] for n in range(self.n_outputs)]
@@ -60,7 +60,7 @@ class MOSAP(object):
                     assert len(pos) == 1
                     mappings[n][k-1].append(pos[0])
 
-                mappings[n][k-1] = np.array(mappings[n][k-1])
+                mappings[n][k-1] = np.array(mappings[n][k-1], dtype=np.int64)
 
             mappings[n] = np.concatenate(mappings[n])
 
