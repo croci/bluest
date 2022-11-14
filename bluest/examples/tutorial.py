@@ -45,6 +45,7 @@ costs = np.array([2**(n_models-i) for i in range(n_models)])
 problem = MyProblem(n_models, costs=costs, covariance_estimation_samples=32, verbose=False)
 
 ##############################################################################################
+import sys; sys.exit(0)
 ##############################################################################################
 
 ################################ PART 1 - BASIC USAGE ########################################
