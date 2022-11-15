@@ -25,10 +25,10 @@ class MyProblem(BLUEProblem):
         out = [0 for i in range(L)]
 
         for i in range(L):
-            if i == 0:
+            if ls[i] == 0:
                 out[i] = np.exp(samples[i])
-            elif i < n_models-1:
-                out[i] = exponential_series(samples[i], n_models-i)
+            elif ls[i] < n_models-1:
+                out[i] = exponential_series(samples[i], n_models-ls[i])
             else:
                 out[i] = np.log(abs(samples[i]))
 
@@ -271,7 +271,7 @@ n_outputs = 2
 class MyMultiOutputProblem(BLUEProblem):
     def sampler(self, ls):
         L = len(ls)
-        Z = np.random.randn()
+        Z = RNG.randn()
         samples = [float(Z) for i in range(L)]
         return samples
 
@@ -284,10 +284,10 @@ class MyMultiOutputProblem(BLUEProblem):
         for i in range(L):
             for n in range(n_outputs):
                 #NOTE the indexing of out
-                if i == 0:
+                if ls[i] == 0:
                     out[n][i] = np.exp(samples[i])**pw[n]
-                elif i < n_models-1:
-                    out[n][i] = exponential_series(samples[i], n_models-i)**pw[n]
+                elif ls[i] < n_models-1:
+                    out[n][i] = exponential_series(samples[i], n_models-ls[i])**pw[n]
                 else:
                     # let's reuse the same quantity for both outputs, why not?
                     out[n][i] = np.log(abs(samples[i]))
