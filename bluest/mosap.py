@@ -556,7 +556,7 @@ class MOSAP(object):
 
         budget, eps = self.check_input(budget, eps)
 
-        delta = 1.0e-6
+        delta = 1.0e-15
 
         L        = self.L
         No       = self.n_outputs
@@ -587,7 +587,7 @@ class MOSAP(object):
             constraint4 = [NonlinearConstraint(lambda x,nn=n : x[0] - self.SAPS[nn].variance(x[1:][mappings[nn]],delta=delta), 0, np.inf, jac = lambda x,nn=n : np.concatenate([[1],-self.SAPS[nn].variance_GH(x[1:][mappings[nn]],nohess=True,delta=delta)[1]]), hess = lambda x,p,nn=n : np.block([[0, np.zeros((1,len(x)-1))],[np.zeros((len(x)-1,1)), -self.SAPS[nn].variance_GH(x[1:][mappings[nn]],delta=delta)[2]]])*p) for n in range(No)]
 
             if x0 is None: x0 = np.ceil(budget*abs(np.random.randn(L))); x0 - (x0@w-budget)*w/(w@w); x0 = np.concatenate([[max_variance(x0,delta=delta)], x0])
-            res = minimize(lambda x : (x[0], eee), x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=[constraint2]+constraint3+constraint4+constraint5, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":1000, 'verbose':3*int(self.verbose)}, tol = 1.0e-15)
+            res = minimize(lambda x : (x[0], eee), x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=[constraint2]+constraint3+constraint4+constraint5, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":5000, 'verbose':3*int(self.verbose)}, tol = 1.0e-7)
 
         else:
             constraint1 = Bounds(0.0*np.ones((L,)), np.inf*np.ones((L,)), keep_feasible=True)
@@ -596,7 +596,7 @@ class MOSAP(object):
             epsq = eps**2
             constraint2 = [NonlinearConstraint(lambda x,n=nn : self.SAPS[n].variance(x[mappings[n]],delta=delta), -np.inf, epsq[n], jac = lambda x,n=nn : self.SAPS[n].variance_GH(x[mappings[n]],nohess=True,delta=delta)[1], hess=lambda x,p,n=nn : self.SAPS[n].variance_GH(x[mappings[n]],delta=delta)[2]*p) for nn in range(No)]
             if x0 is None: x0 = np.ceil(np.linalg.norm(eps)**-2*np.random.rand(L))
-            res = minimize(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=constraint2 + constraint3 + constraint5, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":2500, 'verbose':3*int(self.verbose)}, tol = 1.0e-15)
+            res = minimize(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hessp=lambda x,p : np.zeros((len(x),)), bounds=constraint1, constraints=constraint2 + constraint3 + constraint5, method="trust-constr", options={"factorization_method" : [None,"SVDFactorization"][0], "disp" : True, "maxiter":5000, 'verbose':3*int(self.verbose)}, tol = 1.0e-7)
 
         if budget is not None: res.x = res.x[1:]
 
@@ -611,7 +611,7 @@ class MOSAP(object):
 
         ES,rhs = self.get_max_sample_constraints(max_model_samples)
 
-        delta = 1.0e5
+        delta = 1.0e-15
 
         L        = self.L
         No       = self.n_outputs
@@ -642,7 +642,7 @@ class MOSAP(object):
             constraint5 = [{'type':'ineq', 'fun': lambda x : rr-ees@x[1:], 'jac': lambda x : np.concatenate([np.zeros((1,)),-ees]), 'hess': lambda x,p : 0} for ees,rr in zip(ES,rhs)]
 
             if x0 is None: x0 = np.ceil(budget*abs(np.ones((L,)))); x0 - (x0@w-budget)*w/(w@w); x0 = np.concatenate([[max_variance(x0,delta=delta)], x0])
-            res = minimize_ipopt(lambda x : (x[0], eee), x0, jac=True, hess=lambda x : csr_matrix((len(x),len(x))), bounds=constraint1, constraints=constraint2+constraint3+constraint4+constraint5, options=options, tol = 1.0e-14)
+            res = minimize_ipopt(lambda x : (x[0], eee), x0, jac=True, hess=lambda x : csr_matrix((len(x),len(x))), bounds=constraint1, constraints=constraint2+constraint3+constraint4+constraint5, options=options, tol = 1.0e-7)
 
         else:
             # compute scaling heuristically based on MC samples
@@ -655,7 +655,7 @@ class MOSAP(object):
             constraint5 = [{'type':'ineq', 'fun': lambda x : (meps**2)*rr-ees@x, 'jac': lambda x : -ees, 'hess': lambda x,p : 0} for ees,rr in zip(ES,rhs)]
             constraint2 = [{'type':'ineq', 'fun': lambda x,n=nn : epsq[n] - self.SAPS[n].variance(x[mappings[n]],delta=delta), 'jac': lambda x,n=nn : -self.SAPS[n].variance_GH(x[mappings[n]],nohess=True,delta=delta)[1], 'hess': lambda x,p,n=nn : -self.SAPS[n].variance_GH(x[mappings[n]],delta=delta)[2]*p} for nn in range(No)]
             if x0 is None: x0 = np.ceil(np.linalg.norm(eps)**-2*np.ones((L,)))
-            res = minimize_ipopt(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hess=lambda x : csr_matrix((len(x),len(x))), bounds=constraint1, constraints=constraint2 + constraint3 + constraint5, options=options, tol = 1.0e-12)
+            res = minimize_ipopt(lambda x : [(w/np.linalg.norm(w))@x,w/np.linalg.norm(w)], x0, jac=True, hess=lambda x : csr_matrix((len(x),len(x))), bounds=constraint1, constraints=constraint2 + constraint3 + constraint5, options=options, tol = 1.0e-7)
 
         if budget is not None: res.x = res.x[1:]
         elif eps is not None: res.x *= meps**-2

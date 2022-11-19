@@ -16,7 +16,7 @@ comm = MPI.comm_world
 mpiRank = MPI.rank(comm)
 mpiSize = MPI.size(comm)
 
-mpiBlockSize = 4
+mpiBlockSize = 1
 if mpiSize%mpiBlockSize == 0:
     color = mpiRank%(mpiSize//mpiBlockSize)
     ncolors = mpiSize//mpiBlockSize
@@ -133,10 +133,11 @@ class PoissonProblem(BLUEProblem):
 
 M = n_levels
 
-slow_run = True
+slow_run = False
 check_all = True
 perform_variance_test = True
 global_verbose = False
+solver_test = True
 
 Nmax = 1000
 N_variance_test = 50
@@ -157,6 +158,26 @@ if load_model_graph_full:
 else:
     problem = PoissonProblem(M, n_outputs=No, C=C, costs=costs, covariance_estimation_samples=Nmax, verbose=global_verbose)
     problem.save_graph_data("restrictions_matern_model_data.npz")
+
+if solver_test:
+    from time import time
+    EPS = 0.0018621360085025829 # roughly 5e-3*np.sqrt(true_C[0,0])
+    BUDGET = 4*32*sum(costs)
+    Nrestr = 32
+    max_model_samples = np.inf*np.ones((M,)); max_model_samples[:2] = Nrestr;
+    for K in [3,5,7]:
+        for solver in ["cvxopt", "ipopt"]:
+            for i in range(2):
+                eps = EPS if i==0 else None
+                budget = BUDGET if i==1 else None
+                print("\n\n", solver, " K = ", K, [" EPS"," BUDGET"][i])
+                tic = time()
+                out_BLUE = problem.setup_solver(K=K, eps=eps, budget=budget, continuous_relaxation=True, max_model_samples=max_model_samples, solver=solver)
+                toc = time()-tic
+                print(toc)
+                print(out_BLUE["errors"], out_BLUE["total_cost"])
+
+    import sys; sys.exit(0)
 
 C = problem.get_covariance()
 true_C = C.copy()

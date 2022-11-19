@@ -148,7 +148,10 @@ def postprocess(w, nu, U, ds_circle, which):
     F_L = assemble(-force[1]*ds_circle)
 
     U_mean = 2/3*U
-    L = 0.1
+    if which == 1:
+        L = 0.1
+    else:
+        L = 0.16
     C_D = 2/(U_mean**2*L)*F_D
     C_L = 2/(U_mean**2*L)*F_L
 
