@@ -161,8 +161,10 @@ else:
 
 if solver_test:
     from time import time
-    EPS = 0.0018621360085025829 # roughly 5e-3*np.sqrt(true_C[0,0])
-    BUDGET = 4*32*sum(costs)
+    #EPS = 0.0018621360085025829 # roughly 5e-3*np.sqrt(true_C[0,0])
+    #BUDGET = 4*32*sum(costs)
+    EPS = 1e-3*np.sqrt(problem.get_covariance()[0,0])
+    BUDGET = 1e4*max(costs)
     Nrestr = 32
     max_model_samples = np.inf*np.ones((M,)); max_model_samples[:2] = Nrestr;
     for K in [3,5,7]:

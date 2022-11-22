@@ -26,7 +26,7 @@ cvxpy_default_params = {
         "max_iters" : 1000,
         "feastol" : 1.0e-6,
         "kttsolver" : 'chol',
-        "refinement" : 2,
+        "refinement" : 1,
 }
 
 cvxopt_default_params = {

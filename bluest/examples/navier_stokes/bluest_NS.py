@@ -96,7 +96,7 @@ if __name__ == "__main__":
 
     if mode == "part1":   mus = mus[:3]
     elif mode == "part2": mus = mus[3:]
-    costs = np.array([model["W"].dim()**2 for model in model_data]); costs = costs/min(costs)
+    costs = np.array([model["W"].dim()**2 for model in model_data]); costs = costs/min(costs) # assuming a O(N^2) cost for a direct solver
     if verbose: print("Model pseudo-costs: ", list(costs))
 
     #problem = NavierStokesProblem(M, n_outputs=No, costs=costs, covariance_estimation_samples=max(mpiSize*50,50))
@@ -111,21 +111,21 @@ if __name__ == "__main__":
 
     solver = ["BLUE", "MLMC", "MFMC"]
 
-    eps = 0.01*abs(mus); budget=None
+    eps = 1e-3*np.sqrt([c[0,0] for c in problem.get_covariances()]); budget = None
 
     solver_test = False
     if solver_test:
         from time import time
         #FIXME: this eps is not correct isn't it? It should be on the variance
-        K = 4; eps = 0.01*abs(mus)/100; budget = max(costs)*100
+        K = 3; eps = 1e-3*np.sqrt([c[0,0] for c in problem.get_covariances()]); budget = max(costs)*1e4
         OUT = [[],[]]
 
         out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
         for i in range(2):
             for solver in ["cvxpy", "ipopt"]:
                 tic = time()
-                if i == 0: out = problem.setup_solver(K=K, budget=budget, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-3, 'abstol':1e-5, 'reltol':1e-2})
-                else:      out = problem.setup_solver(K=K, eps=eps, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-7})
+                if i == 0: out = problem.setup_solver(K=K, budget=budget, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-3, 'abstol':1e-6, 'reltol':1e-2})
+                else:      out = problem.setup_solver(K=K, eps=eps, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-7, 'abstol':1e-6})
                 toc = time() - tic
                 out = np.array([max(out['errors']), out['total_cost'], toc])
                 OUT[i].append(out)

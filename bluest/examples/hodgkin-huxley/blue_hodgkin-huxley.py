@@ -418,15 +418,15 @@ if __name__ == '__main__':
         vals = np.array([c[0,0] for c in C])
         eps = np.sqrt(vals)/1000; budget = None
 
-        solver_test = False
+        solver_test = True
         if solver_test:
             from time import time
-            K = 7; eps = np.sqrt(vals)/1000; budget = max(costs)*10**4
+            K = 3; eps = np.sqrt(vals)/1000; budget = max(costs)*10**4
             OUT = [[],[]]
 
             out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
             for i in range(2):
-                for solver in ["cvxopt", "ipopt"]:
+                for solver in ["cvxpy", "ipopt"]:
                     tic = time()
                     if i == 0: out = problem.setup_solver(K=K, budget=budget, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-7, 'abstol':1e-6, 'reltol':1e-3})
                     else:      out = problem.setup_solver(K=K, eps=eps, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-7, 'abstol':1e-6, 'reltol':1e-3})
