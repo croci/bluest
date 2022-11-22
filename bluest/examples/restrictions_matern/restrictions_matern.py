@@ -256,7 +256,7 @@ for Nrestr in Nrestr_list:
     comm.barrier()
 
     #Nmax = int(np.ceil(cost_ratio1*Nrestr - cost_ratio2))
-    Nmax = 32
+    Nmax = 16
 
     assert Nrestr%mpiBlockSize == 0
 
