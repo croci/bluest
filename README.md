@@ -6,7 +6,7 @@
     <img alt="Software License" src="https://img.shields.io/badge/license-MIT-brightgreen.svg?style=flat-square">
 </p>
 
-**BLUEST**: Python package for multilevel best linear unbiased estimation
+**BLUEST**: Python package for single- and multi-output multilevel best linear unbiased estimation
 
 ## Table of contents
 * [Description](#description)
@@ -98,9 +98,7 @@ M. Croci, K. E. Willcox, S. J. Wright, *Multi-output multilevel best linear unbi
 
 ## Authors and contributors
 
-This software is currently mantained and developed by
-
-[M. Croci](mailto:mat.mcroci@gmail.com)
+This software is currently mantained and developed by Matteo Croci ([email](mailto:mat.mcroci@gmail.com), [website](https://croci.github.io/)), University of Texas at Austin, TX, USA.
 
 ## License
 
