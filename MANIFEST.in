@@ -1,2 +1,2 @@
-include bluest/cmisc.so
-include bluest/cmisc.cpp
+global-include cmisc.*.so
+global-include cmisc.cpp

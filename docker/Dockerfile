@@ -1,0 +1,314 @@
+# Builds a base Docker image that all other fenicsproject images are
+# built off of (FROM). In this image we control the end user
+# experience, namely; creating the user fenics, setting up the users
+# environment and the default entry point and cmds.
+#
+# Although this image is not used directly by end-users, it can be
+# found at:
+#
+#   https://quay.io/repository/fenicsproject/base
+#
+# Authors:
+# Jack S. Hale <jack.hale@uni.lu>
+# Garth N. Wells <gnw20@cam.ac.uk>
+
+FROM phusion/baseimage:focal-1.2.0
+
+# Get Ubuntu updates
+USER root
+RUN apt-get update && \
+    apt-get upgrade -y -o Dpkg::Options::="--force-confold" && \
+    apt-get -y install locales sudo && \
+    echo "C.UTF-8 UTF-8" > /etc/locale.gen && \
+    locale-gen && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Set locale environment
+ENV LC_ALL=C.UTF-8 \
+    LANG=C.UTF-8 \
+    LANGUAGE=C.UTF-8
+
+COPY set-home-permissions.sh /etc/my_init.d/set-home-permissions.sh
+
+# Set up user so that we do not run as root
+# See https://github.com/phusion/baseimage-docker/issues/186
+# Disable forward logging
+# Add script to set up permissions of home directory on myinit
+# Run ldconfig so that /usr/local/lib is in the default search
+# path for the dynamic linker.
+RUN useradd -m -s /bin/bash -G sudo,docker_env fenics && \
+    echo "fenics:docker" | chpasswd && \
+    echo "fenics ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers && \
+    rm /etc/my_init.d/10_syslog-ng.init && \ 
+    echo "cat /home/fenics/WELCOME" >> /home/fenics/.bashrc && \
+    chmod +x /etc/my_init.d/set-home-permissions.sh && \
+    ldconfig
+
+USER fenics
+ENV FENICS_HOME /home/fenics
+RUN touch $FENICS_HOME/.sudo_as_admin_successful && \
+    mkdir $FENICS_HOME/shared
+VOLUME /home/fenics/shared
+
+# Print something nice on entry.
+COPY WELCOME $FENICS_HOME/WELCOME
+
+WORKDIR /home/fenics
+USER root
+ENTRYPOINT ["/sbin/my_init","--quiet","--","/sbin/setuser","fenics","/bin/bash","-l","-c"]
+CMD ["/bin/bash","-i"]
+
+WORKDIR /tmp
+
+# Environment variables
+ENV PETSC_VERSION=3.12.3 \
+    SLEPC_VERSION=3.12.1 \
+    PYBIND11_VERSION=2.4.3 \
+    MPI4PY_VERSION=3.0.3 \
+    PETSC4PY_VERSION=3.12.0 \
+    SLEPC4PY_VERSION=3.12.0 \
+    TRILINOS_VERSION=12.10.1 \
+    OPENBLAS_NUM_THREADS=1 \
+    OPENBLAS_VERBOSE=0 \
+    FENICS_PREFIX=$FENICS_HOME/local
+
+# Non-Python utilities and libraries
+RUN apt-get -qq update && \
+    apt-get -y --with-new-pkgs \
+        -o Dpkg::Options::="--force-confold" upgrade && \
+    apt-get -y install curl && \
+    curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | bash && \
+    apt-get -y install \
+        bison \
+        ccache \
+        cmake \
+        doxygen \
+        flex \
+        g++ \
+        gfortran \
+        git \
+        git-lfs \
+        graphviz \
+        libboost-filesystem-dev \
+        libboost-iostreams-dev \
+        libboost-math-dev \
+        libboost-program-options-dev \
+        libboost-system-dev \
+        libboost-thread-dev \
+        libboost-timer-dev \
+        libeigen3-dev \
+        libfreetype6-dev \
+        liblapack-dev \
+        libmpich-dev \
+        libopenblas-dev \
+        libpcre3-dev \
+        libpng-dev \
+        libhdf5-mpich-dev \
+        libgmp-dev \
+        libcln-dev \
+        libmpfr-dev \
+        man \
+        mpich \
+        nano \
+        pkg-config \
+        wget \
+        bash-completion && \
+    git lfs install && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Install Python3 based environment
+RUN apt-get -qq update && \
+    apt-get -y --with-new-pkgs \
+        -o Dpkg::Options::="--force-confold" upgrade && \
+    apt-get -y install \
+        python3-dev \
+        python3-flufl.lock \
+        python3-numpy \
+        python3-ply \
+        python3-pytest \
+        python3-scipy \
+        python3-tk \
+        python3-urllib3 && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Install setuptools
+RUN wget https://bootstrap.pypa.io/get-pip.py && \
+    python3 get-pip.py && \
+    pip3 install --no-cache-dir setuptools && \
+    rm -rf /tmp/*
+
+# Install PETSc from source
+RUN apt-get -qq update && \
+    apt-get -y install \
+        python2-minimal && \
+    wget -nc --quiet https://gitlab.com/petsc/petsc/-/archive/v${PETSC_VERSION}/petsc-v${PETSC_VERSION}.tar.gz -O petsc-${PETSC_VERSION}.tar.gz && \
+    mkdir -p petsc-src && tar -xf petsc-${PETSC_VERSION}.tar.gz -C petsc-src --strip-components 1
+
+RUN ln -s /usr/bin/python2 /usr/bin/python && \
+    cd petsc-src && \
+    ./configure --COPTFLAGS="-O2" \
+                --CXXOPTFLAGS="-O2" \
+                --FOPTFLAGS="-O2" \
+                --with-fortran-bindings=no \
+                --with-debugging=0 \
+                --download-blacs \
+                --download-hypre \
+                --download-metis \
+                --download-mumps \
+                --download-ptscotch \
+                --download-scalapack \
+                --download-spai \
+                --download-suitesparse \
+                --download-superlu \
+                --prefix=/usr/local/petsc-32 && \
+     make && \
+     make install && \
+     rm -rf /tmp/*
+
+# Install SLEPc from source
+# NOTE: Had issues building SLEPc from source tarball generated by bitbucket.
+# Website tarballs work fine, however.
+RUN apt-get -qq update && \
+    apt-get -y install \
+        python2-minimal && \
+    wget -nc --quiet https://gitlab.com/slepc/slepc/-/archive/v${SLEPC_VERSION}/slepc-v${SLEPC_VERSION}.tar.gz -O slepc-${SLEPC_VERSION}.tar.gz && \
+    mkdir -p slepc-src && tar -xf slepc-${SLEPC_VERSION}.tar.gz -C slepc-src --strip-components 1 && \
+    export PETSC_DIR=/usr/local/petsc-32 && \
+    cd slepc-src && \
+    ./configure --prefix=/usr/local/slepc-32 && \
+    make SLEPC_DIR=$(pwd) && \
+    make install && \
+    rm -rf /tmp/*
+
+# By default use the 32-bit build of SLEPc and PETSc.
+ENV SLEPC_DIR=/usr/local/slepc-32 \
+    PETSC_DIR=/usr/local/petsc-32
+
+# Install jupyterlab, sympy, mpi4py, petsc4py, slepc4py and pybind11 from source.
+RUN pip3 install --no-cache-dir jupyter jupyterlab matplotlib sympy==1.1.1 pkgconfig && \
+    pip3 install --no-cache-dir https://github.com/mpi4py/mpi4py/archive/${MPI4PY_VERSION}.tar.gz && \
+    pip3 install --no-cache-dir https://bitbucket.org/petsc/petsc4py/downloads/petsc4py-${PETSC4PY_VERSION}.tar.gz && \
+    pip3 install --no-cache-dir https://bitbucket.org/slepc/slepc4py/downloads/slepc4py-${SLEPC4PY_VERSION}.tar.gz && \
+    pip3 install --no-cache-dir pybind11==${PYBIND11_VERSION} && \
+    wget -nc --quiet https://github.com/pybind/pybind11/archive/v${PYBIND11_VERSION}.tar.gz && \
+    tar -xf v${PYBIND11_VERSION}.tar.gz && \
+    cd pybind11-${PYBIND11_VERSION} && \
+    mkdir build && \
+    cd build && \
+    cmake -DPYBIND11_TEST=False ../ && \
+    make && \
+    make install && \
+    rm -rf /tmp/*
+
+# Our helper scripts
+WORKDIR $FENICS_HOME
+COPY fenics.env.conf $FENICS_HOME/fenics.env.conf
+COPY bin $FENICS_HOME/bin
+RUN PYTHON3_SITE_DIR=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
+    PYTHON3_VERSION=$(python3 -c 'import sys; print(str(sys.version_info[0]) + "." + str(sys.version_info[1]))') && \
+    echo "$FENICS_HOME/local/lib/python$PYTHON3_VERSION/site-packages" >> $PYTHON3_SITE_DIR/fenics-user.pth && \
+    chown -R fenics:fenics $FENICS_HOME
+
+USER fenics
+RUN echo 'source ~/.profile' >> $FENICS_HOME/.bash_profile && \
+    echo '. ~/fenics.env.conf' >> $FENICS_HOME/.profile && \
+    mkdir -p $FENICS_HOME/.config/matplotlib
+COPY matplotlibrc $FENICS_HOME/.config/matplotlib/matplotlibrc
+COPY WELCOME $FENICS_HOME/WELCOME
+
+USER root
+
+ENV FENICS_PYTHON=python3
+ENV DOLFIN_VERSION="2019.1.0.post0"
+ENV MSHR_VERSION="2019.1.0"
+ENV PYPI_FENICS_VERSION=">=2019.1.0,<2019.2.0"
+
+WORKDIR /tmp
+RUN /bin/bash -c "PIP_NO_CACHE_DIR=off ${FENICS_PYTHON} -m pip install 'fenics${PYPI_FENICS_VERSION}' && \
+                  git clone https://bitbucket.org/fenics-project/dolfin.git && \
+                  cd dolfin && \
+                  git checkout ${DOLFIN_VERSION} && \
+                  mkdir build && \
+                  cd build && \
+                  cmake ../ && \
+                  make && \
+                  make install && \
+                  mv /usr/local/share/dolfin/demo /tmp/demo && \
+                  mkdir -p /usr/local/share/dolfin/demo && \
+                  mv /tmp/demo /usr/local/share/dolfin/demo/cpp && \
+                  cd ../python && \
+                  PIP_NO_CACHE_DIR=off ${FENICS_PYTHON} -m pip install . && \
+                  cd demo && \
+                  python3 generate-demo-files.py && \
+                  mkdir -p /usr/local/share/dolfin/demo/python && \
+                  cp -r documented /usr/local/share/dolfin/demo/python && \
+                  cp -r undocumented /usr/local/share/dolfin/demo/python && \
+                  cd /tmp/ && \
+                  git clone https://bitbucket.org/fenics-project/mshr.git && \
+                  cd mshr && \
+                  git checkout ${MSHR_VERSION} && \
+                  mkdir build && \
+                  cd build && \
+                  cmake ../ && \
+                  make && \
+                  make install && \
+                  cd ../python && \
+                  PIP_NO_CACHE_DIR=off ${FENICS_PYTHON} -m pip install . && \
+                  ldconfig && \
+                  rm -rf /tmp/*"
+
+# Install fenics as root user into /usr/local then remove the fenics-* scripts
+# the fenics.env.conf file and the unnecessary /home/fenics/local directory as
+# the user does not need them in the stable image!
+RUN /bin/bash -c "rm -rf $FENICS_HOME/local && \
+                  rm -rf $FENICS_HOME/bin && \
+                  echo '' >> $FENICS_HOME/.profile" 
+
+USER fenics
+WORKDIR $FENICS_HOME
+# Make sure we get something that basically works on this stable build.  It
+# would be better to run unit tests, but at the moment even the quick tests
+# take too long to run.
+
+COPY WELCOME $FENICS_HOME/WELCOME
+
+USER root
+
+RUN apt-get install -y cmake-curses-gui htop
+
+RUN apt-get install -y gdb electric-fence
+
+RUN apt-get install -y gmsh
+
+RUN apt-get install -y libumfpack5 libsuitesparse-dev libglpk-dev python3-swiglpk glpk-utils
+
+RUN python3 -m pip install cvxopt
+RUN python3 -m pip install cvxpy
+RUN python3 -m pip install --no-binary=h5py h5py==3.7.0
+RUN python3 -m pip install meshio==4.4.6
+RUN python3 -m pip install gmsh
+RUN python3 -m pip install pygmsh==7.1.12
+RUN python3 -m pip install networkx==2.6.3
+
+RUN python3 -m pip install --upgrade scipy
+
+RUN apt-get install -y coinor-libipopt-dev --install-recommends
+RUN python3 -m pip install cyipopt
+
+RUN update-alternatives --set mpirun /usr/bin/mpirun.mpich
+
+RUN add-apt-repository ppa:jonathonf/vim
+RUN add-apt-repository ppa:neovim-ppa/stable 
+RUN apt-get update
+RUN apt-get install -y vim neovim
+
+ENV HOME /home/fenics/
+
+COPY .inputrc $HOME
+
+RUN curl -fLo $HOME/.vim/autoload/plug.vim --create-dirs https://raw.githubusercontent.com/junegunn/vim-plug/master/plug.vim
+COPY .vimrc $HOME
+RUN mkdir $HOME/.vim/colors
+RUN vim +'PlugInstall --sync' +qall

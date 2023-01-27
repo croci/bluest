@@ -1,0 +1,14 @@
+#!/bin/bash
+set -e
+
+fenics-pull $@
+fenics-build $@
+
+printf "\033c"
+echo "FEniCS compilation has finished."
+echo "Environment variables are already set up automatically."
+echo ""
+echo "Try some demos in"
+echo "    ${FENICS_PREFIX}/share/dolfin/demo"
+echo ""
+echo "The full build is in ${FENICS_PREFIX} inside the container."

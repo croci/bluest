@@ -1,0 +1,68 @@
+#!/bin/bash
+
+set -e
+
+FENICS_PYTHON="${FENICS_PYTHON:-python3}"
+FENICS_BUILD_TYPE="${FENICS_BUILD_TYPE:-Release}"
+
+if [ -z "${FENICS_SRC_DIR}" ]; then
+    echo "FENICS_SRC_DIR must be defined" >&2
+    exit -1
+fi
+
+if [ -z "${FENICS_PREFIX}" ]; then
+    echo "FENICS_PREFIX must be defined" >&2
+    exit -1
+fi
+
+PYTHON_VERSION=$(${FENICS_PYTHON} -c 'import sys; print(str(sys.version_info[0]) + "." + str(sys.version_info[1]))')
+export PYTHONPATH=${FENICS_PREFIX}/lib/python${PYTHON_VERSION}/site-packages:${PYTHONPATH}
+
+function build_cmake () {
+    # build a project with cmake (dolfin, mshr)
+    project="$1"
+    echo "FENICS-BUILDER: Building $project with CMake..."
+
+    build="$FENICS_SRC_DIR/$project/build-${FENICS_PYTHON}"
+    mkdir -p "$build"
+    cd "$build"
+    cmake ../ -DCMAKE_INSTALL_PREFIX=${FENICS_PREFIX} -DCMAKE_BUILD_TYPE=${FENICS_BUILD_TYPE} \
+              -Wno-dev -DPYTHON_EXECUTABLE:FILEPATH=$(which ${FENICS_PYTHON}) ${CMAKE_EXTRA_ARGS}
+    make
+    make install
+}
+
+function build_pybind11_extension () {
+    project="$1"
+    echo "FENICS-BUILDER: Building $project Python wrapper..."
+
+    cd "$path/python"
+    DOLFIN_DIR=${FENICS_PREFIX}/share/dolfin/cmake ${FENICS_PYTHON} -m pip install -v --prefix=${FENICS_PREFIX} --no-deps --upgrade .
+}
+
+function build () {
+    for project in $@; do
+        echo "FENICS-BUILDER: Building $project..."
+        path="$FENICS_SRC_DIR/$project"
+        if [ ! -d "$path" ]; then
+            echo "FENICS-BUILDER: $project source cannot be found at $path. Please run fenics-pull first."
+            exit -1
+        fi
+        if [ -e $path/setup.py ]; then
+            cd "$path"
+            ${FENICS_PYTHON} -m pip install -v --prefix=${FENICS_PREFIX} --no-deps --upgrade .
+        else
+            build_cmake "$project"
+            if [ -e $path/python/setup.py ]; then
+                cd "$path"
+                build_pybind11_extension "$project"
+            fi
+        fi
+    done
+}
+
+if [ -z "$1" ]; then
+    build fiat dijitso ufl ffc dolfin mshr
+else
+    build $@
+fi

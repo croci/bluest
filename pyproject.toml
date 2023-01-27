@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel", "pybind11"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bluest"
+version = "1.0.0"
+requires-python = ">3.6"
+authors = [
+    {name = "Matteo Croci", email = "mat.mcroci@gmail.com"},
+]
+description = "Multilevel best linear unbiased estimation library for Python"
+readme = "README.md"
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Linux",
+]

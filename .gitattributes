@@ -1,0 +1,3 @@
+*.ipynb -linguist-detectable
+docker/** -linguist-detectable
+*.sh -linguist-detectable

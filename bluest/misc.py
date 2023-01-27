@@ -8,7 +8,7 @@ except ImportError:
             return func
         return decorator
 
-from .cmisc import assemble_psi_c,objectiveK_c,gradK_c,hessKQ_c,cleanupK_c
+from _cmisc_bluest import assemble_psi_c,objectiveK_c,gradK_c,hessKQ_c,cleanupK_c
 
 ##################################################################################################################
 

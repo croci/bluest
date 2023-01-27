@@ -5,11 +5,10 @@ from mpi4py.MPI import COMM_WORLD
 from .blue_fn import blue_fn
 from .mosap import MOSAP,BLUESTError
 from .misc import attempt_mlmc_setup,attempt_mfmc_setup
-from .layered_network_graph import LayeredNetworkGraph
 from .spg import spg
 
 spg_default_params = {"maxit" : 10000,
-                      "maxfc" : 10000**2,
+                      "max_fevals" : 10000**2,
                       "verbose" : False,
                       "spd_threshold" : 5.0e-14,
                       "eps"     : 1.0e-10,
@@ -322,33 +321,6 @@ class BLUEProblem(object):
             #self.G = SG
             #self.M = SG.number_of_nodes()
 
-    def draw_model_graph(self, n=0):
-        import matplotlib.pyplot as plt
-        from matplotlib.colors import to_rgba
-        G = self.G[n]
-        rho = self.get_correlation(n)
-        edge_color_pair = [to_rgba("seagreen"), to_rgba("tab:blue")]
-        pos = nx.shell_layout(G)
-        edges = G.edges()
-        nodes = list(G)
-        weights = np.array([abs(rho[u][v]) for u,v in edges]); weights -= min(weights); weights /= max(weights); weights = 4*weights + 1
-        edge_colors = np.array([edge_color_pair[int(rho[u][v] > 0)] for u,v in edges])
-        node_colors = np.array([G.nodes[l]['cost'] for l in nodes]); node_colors = plt.cm.jet(plt.Normalize()(np.log(node_colors)))
-        nx.draw(G, pos=pos, nodelist=nodes, edgelist=edges, width=weights, edge_color=edge_colors, node_color=node_colors)
-        plt.show()
-
-    def draw_multilayer_model_graph(self):
-        #NOTE: can probably modify this so that it looks more like the single graph plot
-        import matplotlib.pyplot as plt
-        from matplotlib.colors import to_rgba
-
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
-        node_labels = {n : str(n) for n in range(self.M)}
-        LayeredNetworkGraph(self.G, node_labels=node_labels, ax=ax, layout=nx.shell_layout)
-        ax.set_axis_off()
-        plt.show()
-
     #################### COVARIANCE AND COST ESTIMATORS #######################
 
     def estimate_missing_covariances(self, N):
@@ -403,10 +375,10 @@ class BLUEProblem(object):
             X[abs(mask) < 1.0e-15] = 0
             return X*mask
 
-        def evalf(x):
+        def feval(x):
             return 0.5*sum(am(x - C, mask**2)**2 + gamma*am(x**2, invmask**2))
 
-        def evalg(x):
+        def geval(x):
             return am(x - C, mask**2) + gamma*am(x, invmask**2)
 
         if self.mpiRank == 0:
@@ -421,10 +393,10 @@ class BLUEProblem(object):
             else:
                 if self.verbose: print("Running Spectral Gradient Descent for Covariance projection...")
                 x = proj(am(C,abs(mask) > 1.0e-14))
-                res = spg(evalf, evalg, proj, x, eps=spg_params["eps"], maxit=spg_params["maxit"], maxfc=spg_params["maxfc"], iprint=spg_params["verbose"] and self.warning, lmbda_min=spg_params["lmbda_min"], lmbda_max=spg_params["lmbda_max"], M=spg_params["linesearch_history_length"])
+                res = spg(feval, geval, proj, x, eps=spg_params["eps"], maxit=spg_params["maxit"], max_fevals=spg_params["max_fevals"], verbose=spg_params["verbose"] and self.warning, lmbda_min=spg_params["lmbda_min"], lmbda_max=spg_params["lmbda_max"], Hlength=spg_params["linesearch_history_length"])
                 err = res["f"]
 
-                if res["spginfo"] == 0:
+                if res["solver_info"] == 0:
                     if self.verbose: print("Covariance projected, projection error: ", err)
                     if err > spg_params["eps"] and self.verbose and not bypass_error_check:
                         print("\n\n++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
@@ -476,7 +448,7 @@ class BLUEProblem(object):
     def setup_solver(self, K=4, budget=None, eps=None, groups=None, multi_groups=None, solver=None, continuous_relaxation=False, max_model_samples=None, optimization_solver_params=None):
         if budget is None and eps is None: raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None: eps = None
-        if eps is not None and isinstance(eps,(int,float,np.int,np.float)): eps = [eps for n in range(self.n_outputs)]
+        if eps is not None and isinstance(eps,(int,float,np.int64,np.float64, np.float32, np.int32)): eps = [eps for n in range(self.n_outputs)]
         if solver is None: solver=self.params["optimization_solver"]
         if multi_groups is not None and len(multi_groups) != self.n_outputs:
             raise ValueError("multi_groups must be a list of groupings of the same length as the number of outputs.")
@@ -608,7 +580,7 @@ class BLUEProblem(object):
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:
             eps = None
-        if eps is not None and isinstance(eps,(int,float,np.int,np.float)): eps = [eps for n in range(self.n_outputs)]
+        if eps is not None and isinstance(eps,(int,float,np.int64,np.float64, np.int32, np.float32)): eps = [eps for n in range(self.n_outputs)]
         if eps is None: eps = [None for n in range(self.n_outputs)]
 
         M = self.M
@@ -628,7 +600,7 @@ class BLUEProblem(object):
         groups = [[0]]
         for i in range(M-1-lme):
             for remove in combinations(range(1,M-lme),i):
-                keep = np.array([i for i in range(M-lme) if i not in remove], dtype=np.int)
+                keep = np.array([i for i in range(M-lme) if i not in remove], dtype=np.int64)
                 group = list(idx[keep])
                 if all([GG.has_edge(i,j) for i,j in zip(group[:-1],group[1:])]):
                     groups.append(group)
@@ -736,7 +708,7 @@ class BLUEProblem(object):
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:
             eps = None
-        if eps is not None and isinstance(eps,(int,float,np.int,np.float)): eps = [eps for n in range(self.n_outputs)]
+        if eps is not None and isinstance(eps,(int,float,np.int64, np.int32,np.float64, np.float32)): eps = [eps for n in range(self.n_outputs)]
         if eps is None: eps = [None for n in range(self.n_outputs)]
 
         sigmas = [np.sqrt(np.diag(self.get_covariance(n))) for n in range(self.n_outputs)]
@@ -838,7 +810,7 @@ class BLUEProblem(object):
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:
             eps = None
-        if eps is not None and isinstance(eps,(int,float,np.int,np.float)): eps = [eps for n in range(self.n_outputs)]
+        if eps is not None and isinstance(eps,(int,float,np.int64, np.int32, np.float64, np.float32)): eps = [eps for n in range(self.n_outputs)]
 
         Vs  = np.array([self.get_covariance(n)[0,0] for n in range(self.n_outputs)])
         cost = self.get_costs()[0]
@@ -877,7 +849,7 @@ class BLUEProblem(object):
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:
             eps = None
-        if eps is not None and isinstance(eps,(int,float,np.int,np.float)): eps = [eps for n in range(self.n_outputs)]
+        if eps is not None and isinstance(eps,(int,float,np.int64, np.int32, np.float64, np.float32)): eps = [eps for n in range(self.n_outputs)]
 
         if self.verbose: print("Running variance test...", flush=True)
 

@@ -1,0 +1,8 @@
+# FEniCS stable version image + BLUEST
+
+Welcome to FEniCS/stable + BLUEST!
+
+This image provides a full-featured and optimized build of the stable
+release of FEniCS together with all BLUEST package dependencies.
+
+To help you get started check out the bluest_examples folder.

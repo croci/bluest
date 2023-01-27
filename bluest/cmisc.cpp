@@ -96,7 +96,8 @@ void hessKQ_c(py::array_t<double, py::array::c_style> hess, const int N, const i
 
 }
 
-PYBIND11_MODULE(cmisc, m) {
+PYBIND11_MODULE(_cmisc_bluest, m) {
+
     m.doc() = "pybind11 wrapper for cmisc";
 
     m.def("assemble_psi_c", &assemble_psi_c);
