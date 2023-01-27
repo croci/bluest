@@ -7,6 +7,7 @@ ext_modules[0].extra_compile_args[:0] = ["-O3", "-m64", "-ftree-vectorize", "-ff
 ext_modules[0].name = "_cmisc_bluest"
 
 setup(
+    name="bluest",
     packages=["bluest"],
     package_dir={"bluest": "bluest"},
     has_ext_modules=lambda: True,

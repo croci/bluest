@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bluest"
-version = "1.0.0"
+version = "0.1.0"
 requires-python = ">3.6"
 authors = [
     {name = "Matteo Croci", email = "mat.mcroci@gmail.com"},
