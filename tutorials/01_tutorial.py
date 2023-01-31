@@ -166,7 +166,7 @@ RNG.randn()
 
 # Nothing BLUEST-specific in the next two lines: just creating/cleaning up a temporary directory for this script
 import shutil; shutil.rmtree("/tmp/mlblue/", ignore_errors=True) # cleaning up from previous runs
-import os; os.mkdir("/tmp/mlblue") # creating temporary directory for the script
+import os; os.makedirs("/tmp/mlblue", exist_ok=True) # creating temporary directory for the script
 
 # Can save offline estimation data and load it later.
 problem.save_graph_data("/tmp/mlblue/minimal_data.npz")
