@@ -575,8 +575,10 @@ class BLUEProblem(object):
 
         return mus,errs,tot_cost
 
-    def compute_mlmc_variance(self, group, samples):
+    def compute_mlmc_data(self, group, samples):
         M = self.M
+
+        samples = np.array(samples)
 
         more_expensive_models = self.check_costs(warning=True)
         lme = len(more_expensive_models)
@@ -765,7 +767,7 @@ class BLUEProblem(object):
 
         return mu, errs, tot_cost
 
-    def compute_mfmc_variance(self, clique, samples):
+    def compute_mfmc_data(self, clique, samples):
         sigmas = [np.sqrt(np.diag(self.get_covariance(n))) for n in range(self.n_outputs)]
         rhos = [self.get_correlation(n)[0,:] for n in range(self.n_outputs)]
         w = self.get_costs()
