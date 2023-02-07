@@ -4,7 +4,7 @@ from itertools import combinations
 from mpi4py.MPI import COMM_WORLD
 from .blue_fn import blue_fn
 from .mosap import MOSAP,BLUESTError
-from .misc import attempt_mlmc_setup,attempt_mfmc_setup
+from .misc import attempt_mlmc_setup,attempt_mfmc_setup,compute_mfmc_data
 from .spg import spg
 
 spg_default_params = {"maxit" : 10000,
@@ -575,6 +575,68 @@ class BLUEProblem(object):
 
         return mus,errs,tot_cost
 
+    def compute_mlmc_variance(self, groups, samples):
+        M = self.M
+
+        more_expensive_models = self.check_costs(warning=True)
+        lme = len(more_expensive_models)
+
+        w = self.get_costs()
+        idx = np.argsort(w)[::-1]
+        idx = idx[lme:]
+        assert idx[0] == 0
+
+        CC = self.get_covariances()
+        dV = self.get_mlmc_variances()
+
+        # this is only True if all dVn are entirely populated with NaNs/infs
+        if not any(np.isfinite(dVn).any() for dVn in dV):
+            if self.mpiRank == 0: print("\nWarning! MLMC variances were not provided nor estimated. The resulting MLMC estimator might be suboptimal.\n")
+
+        GG = nx.intersection_all(self.G)
+        if not all([GG.has_edge(i,j) for i,j in zip(group[:-1],group[1:])]):
+            raise ValueError("Group given is not compatible with MLMC.")
+
+        if group[0] != 0:
+            raise ValueError("The high-fidelity model, model 0, should be the first in the given group!")
+
+        CC = self.get_covariances()
+        dV = self.get_mlmc_variances()
+
+        # this is only True if all dVn are entirely populated with NaNs/infs
+        if not any(np.isfinite(dVn).any() for dVn in dV):
+            if self.mpiRank == 0: print("\nWarning! MLMC variances were not provided nor estimated. The resulting MLMC estimator might be suboptimal.\n")
+
+        assert group[0] == 0
+        errs = np.zeros((self.n_outputs,))
+        mlmc_costs = np.zeros((self.n_outputs,))
+        # getting actual MLMC costs and variances
+        for n in range(self.n_outputs):
+            C = CC[n]
+            subC = C[np.ix_(group,group)]
+            subw = w[group].copy()
+            if len(group) > 1:
+                v,corrs = np.diag(subC).copy(), np.diag(subC,1)
+                v[:-1]    += v[1:] - 2*corrs
+                # if better value available from dV, then use it
+                for i in range(len(group)-1):
+                    ii = min(group[i], group[i+1])
+                    jj = max(group[i], group[i+1])
+                    check = dV[n][ii,jj]
+                    if np.isfinite(check):
+                        v[i] = check
+
+                subw[:-1] += subw[1:]
+            else: v = subC[0]
+
+            errs[n] = sum(v[samples>0]/samples[samples>0])
+            mlmc_costs[n] = samples@subw
+
+        mlmc_data = {"models" : group, "samples" : samples, "errors" : errs, "total_cost" : max(mlmc_costs)}
+
+        return mlmc_data
+
+
     def setup_mlmc(self, budget=None, eps=None, continuous_relaxation=False):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
@@ -614,7 +676,7 @@ class BLUEProblem(object):
 
         # this is only True if all dVn are entirely populated with NaNs/infs
         if not any(np.isfinite(dVn).any() for dVn in dV):
-            if self.mpiRank == 0: print("\nWarning! MLMC variances were not provided nor estimated. The resulting MLMC estimator might be suboptimal.\nThe estimation and use of MLMC variances is a new feature so this warning might be caused by an old datafile. To fix this, delete the old datafile and re-run the covariance estimation routine.\n")
+            if self.mpiRank == 0: print("\nWarning! MLMC variances were not provided nor estimated. The resulting MLMC estimator might be suboptimal.\n")
 
         if self.mpiRank == 0:
             for group in groups:
@@ -702,6 +764,30 @@ class BLUEProblem(object):
                 else:       mu[n] += sumse[n][0]/N
 
         return mu, errs, tot_cost
+
+    def compute_mfmc_variance(self, clique, samples):
+        sigmas = [np.sqrt(np.diag(self.get_covariance(n))) for n in range(self.n_outputs)]
+        rhos = [self.get_correlation(n)[0,:] for n in range(self.n_outputs)]
+        w = self.get_costs()
+
+        if not all(is_subclique(self.G[n], clique) for n in range(self.n_outputs)):
+            raise ValueError("Group given is not a clique of the model graph!")
+
+        if clique[0] != 0:
+            raise ValueError("The high-fidelity model, model 0, should be the first in the given group!")
+
+        mfmc_data_list = [{} for n in range(self.n_outputs)]
+        for n in range(self.n_outputs):
+            feasible,mfmc_data_list[n] = compute_mfmc_data(sigmas[n][clique], rhos[n][clique], w[clique], samples)
+            if not feasible:
+                raise ValueError("Prescribed samples are not feasible for MFMC")
+
+        cost = max(mfmc_data_list[n]["total_cost"] for n in range(self.n_outputs))
+        errs = [mfmc_data_list[n]["error"] for n in range(self.n_outputs)]
+        alphas = [mfmc_data_list[n]["alphas"] for n in range(self.n_outputs)]
+        mfmc_data = {"models" : clique, "samples" : samples, "errors" : errs, "total_cost" : cost, "alphas" : alphas}
+
+        return mfmc_data
 
     def setup_mfmc(self, budget=None, eps=None, continuous_relaxation=False):
         if budget is None and eps is None:
