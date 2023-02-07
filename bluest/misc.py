@@ -52,6 +52,8 @@ def compute_mfmc_data(sigmas, rhos, costs, samples):
     idx = np.argsort(abs(rhos))[::-1]
     assert idx[0] == 0
 
+    samples = np.array(samples)
+
     m = samples[idx]
     s = sigmas[idx]
     rho = np.concatenate([rhos[idx], [0]])
@@ -66,7 +68,7 @@ def compute_mfmc_data(sigmas, rhos, costs, samples):
 
     variance = s[0]**2/m[0] + sum((1/m[:-1]-1/m[1:])*(alphas**2*s[1:]**2 - 2*alphas*rho[1:-1]*s[0]*s[1:]))
 
-    err = np.sqrt(variance(m))
+    err = np.sqrt(variance)
     tot_cost = m@w
 
     mfmc_data = {"samples" : m, "error" : err, "total_cost" : tot_cost, "alphas" : alphas, "variance" : variance}

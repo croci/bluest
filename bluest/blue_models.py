@@ -575,7 +575,7 @@ class BLUEProblem(object):
 
         return mus,errs,tot_cost
 
-    def compute_mlmc_variance(self, groups, samples):
+    def compute_mlmc_variance(self, group, samples):
         M = self.M
 
         more_expensive_models = self.check_costs(warning=True)
