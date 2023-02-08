@@ -24,7 +24,7 @@ def attempt_mlmc_setup(v, w, budget=None, eps=None, continuous_relaxation=False)
     if budget is not None: mu = budget/q
     else:                  mu = q/eps**2
     m = mu*np.sqrt(v/w)
-    #m = np.maximum(m,1) # should be fine even without this
+    m = np.maximum(m,1)
 
     variance = lambda m : sum(v[m>0]/m[m>0])
     if budget is not None:
@@ -101,7 +101,7 @@ def attempt_mfmc_setup(sigmas, rhos, costs, budget=None, eps=None, continuous_re
     if budget is not None: m1 = budget/(w@r)
     else:                  m1 = eps**-2*(w@r)*(s[0]**2/w[0])*(1-rho[1]**2)
     m = np.concatenate([[m1], m1*r[1:]])
-    #m = np.maximum(m, 1) # should be fine even without this.
+    m = np.maximum(m, 1)
 
     variance = lambda m : s[0]**2/m[0] + sum((1/m[:-1]-1/m[1:])*(alphas**2*s[1:]**2 - 2*alphas*rho[1:-1]*s[0]*s[1:]))
     if budget is not None:

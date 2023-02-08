@@ -740,16 +740,17 @@ class BLUEProblem(object):
 
         return mlmc_data
 
-    def solve_mlmc(self, budget=None, eps=None, continuous_relaxation=False):
+    def solve_mlmc(self, budget=None, eps=None, mlmc_data=None):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:
             eps = None
 
-        mlmc_data = self.setup_mlmc(budget=budget, eps=eps, continuous_relaxation=continuous_relaxation)
+        if mlmc_data is None:
+            mlmc_data = self.setup_mlmc(budget=budget, eps=eps, continuous_relaxation=False)
 
         best_group = mlmc_data["models"]
-        samples    = mlmc_data["samples"]
+        samples    = np.round(mlmc_data["samples"]).astype(np.int64)
         errs       = mlmc_data["errors"]
         tot_cost   = mlmc_data["total_cost"]
 
@@ -856,16 +857,17 @@ class BLUEProblem(object):
 
         return mfmc_data
 
-    def solve_mfmc(self, budget=None, eps=None, continuous_relaxation=False):
+    def solve_mfmc(self, budget=None, eps=None, mfmc_data=None):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:
             eps = None
 
-        mfmc_data = self.setup_mfmc(budget=budget, eps=eps, continuous_relaxation=continuous_relaxation)
+        if mfmc_data is None:
+            mfmc_data = self.setup_mfmc(budget=budget, eps=eps, continuous_relaxation=continuous_relaxation)
 
         best_group = mfmc_data["models"]
-        samples    = mfmc_data["samples"]
+        samples    = np.round(mfmc_data["samples"]).astype(np.int64)
         errs       = mfmc_data["errors"]
         tot_cost   = mfmc_data["total_cost"]
         alphas     = mfmc_data["alphas"]
