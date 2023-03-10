@@ -639,7 +639,7 @@ class BLUEProblem(object):
         return mlmc_data
 
 
-    def setup_mlmc(self, budget=None, eps=None, continuous_relaxation=False):
+    def setup_mlmc(self, budget=None, eps=None, continuous_relaxation=False, small_budget=False):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:
@@ -702,7 +702,15 @@ class BLUEProblem(object):
 
                         subw[:-1] += subw[1:]
                     else: v = subC[0]
-                    feasible, mlmc_data_list[n] = attempt_mlmc_setup(v, subw, budget=budget, eps=eps[n], continuous_relaxation=continuous_relaxation)
+                    if small_budget:
+                        subdV = dV[n][np.ix_(group,group)]
+                        feasible, mlmc_data_list[n] = attempt_mlmc_setup(v, subw, budget=budget, eps=eps[n],
+                                                                     continuous_relaxation=continuous_relaxation,
+                                                                     small_budget=small_budget, subC=subC, subdV=subdV)
+                    else:
+                        # Matteo's original code
+                        feasible, mlmc_data_list[n] = attempt_mlmc_setup(v, subw, budget=budget, eps=eps[n],
+                                                                         continuous_relaxation=continuous_relaxation)
                     if not feasible: break
 
                 if not feasible: continue

@@ -12,7 +12,7 @@ from _cmisc_bluest import assemble_psi_c,objectiveK_c,gradK_c,hessKQ_c,cleanupK_
 
 ##################################################################################################################
 
-def attempt_mlmc_setup(v, w, budget=None, eps=None, continuous_relaxation=False):
+def attempt_mlmc_setup(v, w, budget=None, eps=None, continuous_relaxation=False, small_budget=False, subC=None, subdV=None):
     if budget is None and eps is None:
         raise ValueError("Need to specify either budget or RMSE tolerance")
     elif budget is not None and eps is not None:
@@ -35,8 +35,11 @@ def attempt_mlmc_setup(v, w, budget=None, eps=None, continuous_relaxation=False)
         obj = lambda m : m@w
 
     if not continuous_relaxation:
-        m,fval = best_closest_integer_solution(m, obj, constraint, len(v))
-        if np.isinf(fval): return False,None
+        if small_budget and budget is not None:
+            m = low_budget_integer_solution_ml(w, subC, subdV, budget)
+        else:
+            m,fval = best_closest_integer_solution(m, obj, constraint, len(v))
+            if np.isinf(fval): return False,None
 
     err = np.sqrt(variance(m))
     tot_cost = m@w
@@ -420,8 +423,8 @@ def low_budget_integer_solution(rhos, costs, budget):
     [Gruber et. al, A multifidelity Monte Carlo method for realistic computational budgets, 2022]
     """
     # if only one model remains, choose as many samples as the budget allows
-    if rhos.shape[0] == 1:
-        return np.array([np.floor(budget / costs[0])]).astype(int)
+    if costs.shape[0] == 1:
+        return np.array([np.max([np.floor(budget / costs[0]), 1])]).astype(int)
 
     # get rho into convenient shape for slicing
     rho = np.concatenate([rhos, [0]])
@@ -435,6 +438,10 @@ def low_budget_integer_solution(rhos, costs, budget):
     # Nicole (March 9, 2023): in my previous implementations, I used a the original rho[0] and rho[1] not the recursive
     # ones. Looking through the paper now, I don't find the reason why I did that though
 
+    # check that m is increasing
+    if not all(m[1:]-m[:-1] >= 0):
+        raise RuntimeError("In misc.low_budget_integer_solution: encountered non-increasing m = {}".format(m))
+
     # if first entry in m is >= 1 everything is rounded down
     if m[0] >= 1:
         return np.floor(m).astype(int)
@@ -442,9 +449,59 @@ def low_budget_integer_solution(rhos, costs, budget):
     # fix first entry of m to 1 and adjust budget
     m[0] = 1
     adjusted_budget = budget - costs[0]
+    if adjusted_budget < 0:
+        return np.ones(costs.shape)
 
     # recursion with adjusted budget
     m_sub = low_budget_integer_solution(rhos=rhos[1:], costs=costs[1:], budget=adjusted_budget)
+
+    # modify m with the solution obtained from the recursion
+    m[1:] = m_sub
+
+    return m.astype(int)
+
+def low_budget_integer_solution_ml(costs, subC, subdV, budget):
+
+    # if only one model remains, choose as many samples as the budget allows
+    if costs.shape[0] == 1:
+        return np.array([np.max([np.floor(budget / costs[0]), 1])]).astype(int)
+
+    # compute v
+    v, corrs = np.diag(subC).copy(), np.diag(subC, 1)
+    v[:-1] += v[1:] - 2 * corrs
+    # if better value available from dV, then use it
+    for i in range(subdV.shape[0]-1):
+        check = subdV[i, i+1]
+        if np.isfinite(check):
+            v[i] = check
+
+    # compute m
+    q = sum(np.sqrt(v * costs))
+    mu = budget / q
+    m = mu * np.sqrt(v / costs)
+
+    # check that m is increasing
+    # if not all(m[1:]-m[:-1] >= 0):
+    #     raise RuntimeError("In misc.low_budget_integer_solution_ml: encountered non-increasing m = {}".format(m))
+
+    # if first entry in m is >= 1, everything gets rounded down
+    if m[0] >= 1:
+        return np.floor(m).astype(int)
+
+    # fix first entry of m to 1 and adjust budget
+    m[0] = 1
+    adjusted_budget = budget - costs[0]
+    if adjusted_budget < 0:
+        return np.ones(costs.shape)
+
+    # restrict matrices to submatrices
+    subsubC = subC[1:, :]
+    subsubC = subsubC[:, 1:]
+    subsubdV = subdV[1:, :]
+    subsubdV  = subsubdV[:, 1:]
+
+    # recursion with adjusted budget
+    m_sub = low_budget_integer_solution_ml(costs=costs[1:], budget=adjusted_budget, subC=subsubC, subdV=subsubdV)
 
     # modify m with the solution obtained from the recursion
     m[1:] = m_sub
