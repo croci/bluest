@@ -791,7 +791,12 @@ class BLUEProblem(object):
 
         return mfmc_data
 
-    def setup_mfmc(self, budget=None, eps=None, continuous_relaxation=False):
+    def setup_mfmc(self, budget=None, eps=None, continuous_relaxation=False, small_budget=False):
+        # changelog (Nicole, March 9, 2023):
+        # I'm introducing the optional argument small_budget to toggle on the (more) optimized sample size scheme from
+        # [Gruber et al, A multifidelity Monte Carlo method for realistic computational budgets, 2022]
+        # The default value is False to guarantee backwards-compatibility for Matteo's code
+
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:
@@ -817,7 +822,13 @@ class BLUEProblem(object):
                 assert clique[0] == 0
                 mfmc_data_list = [{} for n in range(self.n_outputs)]
                 for n in range(self.n_outputs):
-                    feasible,mfmc_data_list[n] = attempt_mfmc_setup(sigmas[n][clique], rhos[n][clique], w[clique], budget=budget, eps=eps[n], continuous_relaxation=continuous_relaxation)
+                    feasible,mfmc_data_list[n] = attempt_mfmc_setup(sigmas[n][clique],
+                                                                    rhos[n][clique],
+                                                                    w[clique],
+                                                                    budget=budget,
+                                                                    eps=eps[n],
+                                                                    continuous_relaxation=continuous_relaxation,
+                                                                    small_budget=small_budget)
                     if not feasible: break
 
                 if not feasible: continue
