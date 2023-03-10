@@ -800,10 +800,6 @@ class BLUEProblem(object):
         return mfmc_data
 
     def setup_mfmc(self, budget=None, eps=None, continuous_relaxation=False, small_budget=False):
-        # changelog (Nicole, March 9, 2023):
-        # I'm introducing the optional argument small_budget to toggle on the (more) optimized sample size scheme from
-        # [Gruber et al, A multifidelity Monte Carlo method for realistic computational budgets, 2022]
-        # The default value is False to guarantee backwards-compatibility for Matteo's code
 
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
@@ -859,7 +855,7 @@ class BLUEProblem(object):
             samples = np.max(np.vstack([mfmc_data["samples"] for mfmc_data in best_data]), axis=0)
             cost = samples@w[best_group]
             if budget is not None: # adjust if budget bound. The max above already takes care of the variance bound.
-                samples = np.floor(samples - (max(cost-budget,0)/(w[best_group]@w[best_group]))*w[best_group]).astype(int)
+                samples = np.floor(samples - (max(cost-budget,0)/(w[best_group]@w[best_group]))*w[best_group]).astype(np.int64)
                 samples[0] = max(samples[0], 1) # need at least one sample on level 0
                 cost = samples@w[best_group]
 
