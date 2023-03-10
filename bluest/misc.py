@@ -12,7 +12,7 @@ from _cmisc_bluest import assemble_psi_c,objectiveK_c,gradK_c,hessKQ_c,cleanupK_
 
 ##################################################################################################################
 
-def attempt_mlmc_setup(v, w, budget=None, eps=None, continuous_relaxation=False):
+def attempt_mlmc_setup(v, w, budget=None, eps=None, continuous_relaxation=False, small_budget=False, subC=None, subdV=None):
     if budget is None and eps is None:
         raise ValueError("Need to specify either budget or RMSE tolerance")
     elif budget is not None and eps is not None:
@@ -36,7 +36,7 @@ def attempt_mlmc_setup(v, w, budget=None, eps=None, continuous_relaxation=False)
 
     if not continuous_relaxation:
         if small_budget and budget is not None:
-            m = low_budget_integer_solution_ml(w, subC, subdV, budget)
+            m = mlmc_low_budget_integer_solution(w, subC, subdV, budget)
         else:
             m,fval = best_closest_integer_solution(m, obj, constraint, len(v))
             if np.isinf(fval): return False,None
@@ -457,7 +457,7 @@ def mfmc_low_budget_integer_solution(rhos, costs, budget):
 
     return m.astype(np.int64)
 
-def low_budget_integer_solution_ml(costs, subC, subdV, budget):
+def mlmc_low_budget_integer_solution(costs, subC, subdV, budget):
 
     # if only one model remains, choose as many samples as the budget allows
     if costs.shape[0] == 1:
@@ -498,7 +498,7 @@ def low_budget_integer_solution_ml(costs, subC, subdV, budget):
     subsubdV  = subsubdV[:, 1:]
 
     # recursion with adjusted budget
-    m_sub = low_budget_integer_solution_ml(costs=costs[1:], budget=adjusted_budget, subC=subsubC, subdV=subsubdV)
+    m_sub = mlmc_low_budget_integer_solution(costs=costs[1:], budget=adjusted_budget, subC=subsubC, subdV=subsubdV)
 
     # modify m with the solution obtained from the recursion
     m[1:] = m_sub
