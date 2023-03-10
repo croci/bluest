@@ -75,7 +75,11 @@ def compute_mfmc_data(sigmas, rhos, costs, samples):
 
     return feasible,mfmc_data
 
-def attempt_mfmc_setup(sigmas, rhos, costs, budget=None, eps=None, continuous_relaxation=False):
+def attempt_mfmc_setup(sigmas, rhos, costs, budget=None, eps=None, continuous_relaxation=False, small_budget=False):
+    # The optional argument small_budget toggles on the (more) optimized sample size scheme from
+    # [Gruber et al, A multifidelity Monte Carlo method for realistic computational budgets, 2022]
+    # The default value is False to guarantee consistency with the rest of the code.
+
     if budget is None and eps is None:
         raise ValueError("Need to specify either budget or RMSE tolerance")
     elif budget is not None and eps is not None:
@@ -112,8 +116,11 @@ def attempt_mfmc_setup(sigmas, rhos, costs, budget=None, eps=None, continuous_re
         obj = lambda m : m@w
 
     if not continuous_relaxation:
-        m,fval = best_closest_integer_solution(m, obj, constraint, len(sigmas))
-        if np.isinf(fval): return False,None
+        if small_budget and budget is not None:
+            m = mfmc_low_budget_integer_solution(rhos, costs, budget)
+        else:
+            m,fval = best_closest_integer_solution(m, obj, constraint, len(sigmas))
+            if np.isinf(fval): return False,None
 
     err = np.sqrt(variance(m))
     tot_cost = m@w
@@ -404,6 +411,42 @@ def best_closest_integer_solution(sol, obj, constr, N, e=None):
     best_fval = fvals[i]
 
     return best_val, best_fval
+
+
+def mfmc_low_budget_integer_solution(rhos, costs, budget):
+    """
+    This is an implementation of the low-budget MFMC samplesize algorithm from
+    [Gruber et. al, A multifidelity Monte Carlo method for realistic computational budgets, 2022]
+    """
+    # if only one model remains, choose as many samples as the budget allows
+    if rhos.shape[0] == 1:
+        return np.array([np.floor(budget / costs[0])]).astype(np.int64)
+
+    # get rho into convenient shape for slicing
+    rho = np.concatenate([rhos, [0]])
+
+    # compute number of samples
+    # this is the same code as in attempt_mfmc_setup above, but using that rho[0] might not be 1
+    denom = rho[0] ** 2 - rho[1] ** 2
+    r = np.sqrt(costs[0] / costs * (rho[:-1] ** 2 - rho[1:] ** 2) / denom)
+    m1 = budget / (costs @ r)
+    m = np.concatenate([[m1], m1 * r[1:]])
+
+    # if first entry in m is >= 1 everything is rounded down
+    if m[0] >= 1:
+        return np.floor(m).astype(np.int64)
+
+    # fix first entry of m to 1 and adjust budget
+    m[0] = 1
+    adjusted_budget = budget - costs[0]
+
+    # recursion with adjusted budget
+    m_sub = mfmc_low_budget_integer_solution(rhos=rhos[1:], costs=costs[1:], budget=adjusted_budget)
+
+    # modify m with the solution obtained from the recursion
+    m[1:] = m_sub
+
+    return m.astype(np.int64)
 
 ##################################################################################################################
 
