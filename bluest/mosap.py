@@ -288,7 +288,7 @@ class MOSAP(object):
 
         return samples.astype(int)
 
-    def solve(self, budget=None, eps=None, solver="cvxpy", x0=None, continuous_relaxation=False, max_model_samples=None, solver_params=None):
+    def solve(self, budget=None, eps=None, solver="cvxpy", x0=None, continuous_relaxation=False, max_model_samples=None, solver_params=None, pareto_front_tau=None):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         if solver not in ["scipy", "cvxpy", "ipopt", "cvxopt"]:
@@ -298,7 +298,7 @@ class MOSAP(object):
             if eps is None: print("Minimizing statistical error for fixed cost...\n")
             else:           print("Minimizing cost given statistical error tolerance...\n")
 
-        if   solver == "cvxpy":  samples = self.cvxpy_solve(budget=budget, eps=eps, max_model_samples=max_model_samples, cvxpy_params=solver_params)
+        if   solver == "cvxpy":  samples = self.cvxpy_solve(budget=budget, eps=eps, max_model_samples=max_model_samples, cvxpy_params=solver_params, pareto_front_tau=pareto_front_tau)
         elif solver == "cvxopt": samples = self.cvxopt_solve(budget=budget, eps=eps, max_model_samples=max_model_samples, cvxopt_params=solver_params)
         elif solver == "ipopt":  samples = self.ipopt_solve(budget=budget, eps=eps, x0=x0, max_model_samples=max_model_samples)
         elif solver == "scipy":  samples = self.scipy_solve(budget=budget, eps=eps, x0=x0, max_model_samples=max_model_samples)
@@ -497,7 +497,7 @@ class MOSAP(object):
         out = [bmat >> 0 for bmat in bmats]
         return out
 
-    def cvxpy_solve(self, budget=None, eps=None, delta=0.0, max_model_samples=None, cvxpy_params=None):
+    def cvxpy_solve(self, budget=None, eps=None, delta=0.0, max_model_samples=None, cvxpy_params=None, pareto_front_tau=None):
         budget, eps = self.check_input(budget, eps)
 
         L        = self.L
@@ -515,21 +515,29 @@ class MOSAP(object):
         scales = np.array([1/abs(self.SAPS[n].psi).sum(axis=0).mean() for n in range(No)])
 
         m = cp.Variable(L, nonneg=True)
-        if budget is not None:
-            t = cp.Variable(nonneg=True)
-            obj = cp.Minimize(t)
-            constraints = [w@m <= 1, *self.cvxpy_get_multi_constraints(m, t=t, eps=None)]
-            constraints += [m[mappings[n]]@e[mappings[n]] >= 1./budget for n in range(self.n_outputs)]
-            constraints += [m@ees <= rr/budget for ees,rr in zip(ES,rhs)]
+        if pareto_front_tau is None:
+            if budget is not None:
+                t = cp.Variable(nonneg=True)
+                obj = cp.Minimize(t)
+                constraints = [w@m <= 1, *self.cvxpy_get_multi_constraints(m, t=t, eps=None)]
+                constraints += [m[mappings[n]]@e[mappings[n]] >= 1./budget for n in range(self.n_outputs)]
+                constraints += [m@ees <= rr/budget for ees,rr in zip(ES,rhs)]
+            else:
+                # compute scaling heuristically based on MC samples
+                n_MC_samples = max([CC[0,0]/ep**2 for CC,ep in zip(self.C,eps)])
+                meps = max(eps); meps=100/np.sqrt(n_MC_samples)
+                eps = eps/meps
+                obj = cp.Minimize((w/np.linalg.norm(w))@m)
+                constraints = [*self.cvxpy_get_multi_constraints(m, t=None, eps=eps)]
+                constraints += [m[mappings[n]]@e[mappings[n]] >= 1*meps**2 for n in range(self.n_outputs)]
+                constraints += [m@ees <= rr*meps**2 for ees,rr in zip(ES,rhs)]
+
         else:
-            # compute scaling heuristically based on MC samples
-            n_MC_samples = max([CC[0,0]/ep**2 for CC,ep in zip(self.C,eps)])
-            meps = max(eps); meps=100/np.sqrt(n_MC_samples)
-            eps = eps/meps
-            obj = cp.Minimize((w/np.linalg.norm(w))@m)
-            constraints = [*self.cvxpy_get_multi_constraints(m, t=None, eps=eps)]
-            constraints += [m[mappings[n]]@e[mappings[n]] >= 1*meps**2 for n in range(self.n_outputs)]
-            constraints += [m@ees <= rr*meps**2 for ees,rr in zip(ES,rhs)]
+            t = cp.Variable(nonneg=True)
+            obj = cp.Minimize(t + pareto_front_tau/np.linalg.norm(w)*(w@m))
+            constraints = [*self.cvxpy_get_multi_constraints(m, t=t, eps=None)]
+            constraints += [m[mappings[n]]@e[mappings[n]] >= 1. for n in range(self.n_outputs)]
+            constraints += [m@ees <= rr for ees,rr in zip(ES,rhs)]
 
         prob = cp.Problem(obj, constraints)
 
@@ -545,8 +553,9 @@ class MOSAP(object):
             return None
 
         if self.verbose: print(m.value)
-        if budget is not None: m.value *= budget
-        elif eps  is not None: m.value /= meps**2
+        if pareto_front_tau is None:
+            if budget is not None: m.value *= budget
+            elif eps  is not None: m.value /= meps**2
 
         if self.verbose: print(m.value.round())
         return m.value

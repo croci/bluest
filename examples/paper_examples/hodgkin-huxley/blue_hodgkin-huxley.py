@@ -418,7 +418,8 @@ if __name__ == '__main__':
         vals = np.array([c[0,0] for c in C])
         eps = np.sqrt(vals)/1000; budget = None
 
-        solver_test = True
+        solver_test = False
+        pareto_front = True
         if solver_test:
             from time import time
             K = 4; eps = np.sqrt(vals)/1000; budget = max(costs)*10**4
@@ -442,6 +443,23 @@ if __name__ == '__main__':
                 print("\terrors\t   total cost\t   time\n")
                 print(OUT[i], "\n")
 
+            sys.exit(0)
+
+        if pareto_front:
+            taus = 10.**np.arange(-15,9)[::-1]
+            out_costs = []
+            out_errors = []
+            for tau in taus:
+                K = 3; eps = None; budget = max(costs)*1e4
+                try: out_BLUE = problem.setup_solver(K=K, budget=budget, eps=None, continuous_relaxation = True, solver="cvxpy", pareto_front_tau = tau, optimization_solver_params={'feastol':1.e-9, 'abstol':1e-6, 'reltol':1e-3})
+                except BLUESTError: out_BLUE = problem.setup_solver(K=K, budget=budget, eps=None, continuous_relaxation = True, solver="cvxpy", pareto_front_tau = tau, optimization_solver_params={'feastol':1.e-5, 'abstol':1e-6, 'reltol':1e-3})
+
+                std_devs = np.sqrt([c[0,0] for c in problem.get_covariances()])
+                print("\n\n\nTotal Cost: %e. Max normalised error: %e\n\n\n" % (out_BLUE['total_cost'], max(out_BLUE['errors']/std_devs)))
+                out_costs.append(out_BLUE['total_cost'])
+                out_errors.append(max(out_BLUE['errors']/std_devs))
+
+            np.savez("./pareto_front_results.npz", taus = taus, costs = out_costs, errors = out_errors)
             sys.exit(0)
 
         out_BLUE = problem.setup_solver(K=7, budget=budget, eps=eps)

@@ -181,7 +181,7 @@ class SAP(object):
 
         return samples.astype(int)
     
-    def solve(self, budget=None, eps=None, solver="cvxpy", x0=None, continuous_relaxation=False, max_model_samples=None, solver_params=None):
+    def solve(self, budget=None, eps=None, solver="cvxpy", x0=None, continuous_relaxation=False, max_model_samples=None, solver_params=None, pareto_front_tau=None):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         if solver not in ["scipy", "cvxpy", "ipopt", "cvxopt"]:
@@ -191,7 +191,7 @@ class SAP(object):
             if eps is None: print("Minimizing statistical error for fixed cost...\n")
             else:           print("Minimizing cost given statistical error tolerance...\n")
 
-        if   solver == "cvxpy":  samples = self.cvxpy_solve(budget=budget, eps=eps, max_model_samples=max_model_samples, cvxpy_params=solver_params)
+        if   solver == "cvxpy":  samples = self.cvxpy_solve(budget=budget, eps=eps, max_model_samples=max_model_samples, cvxpy_params=solver_params, pareto_front_tau=pareto_front_tau)
         elif solver == "cvxopt": samples = self.cvxopt_solve(budget=budget, eps=eps, max_model_samples=max_model_samples, cvxopt_params=solver_params)
         elif solver == "scipy":  samples = self.scipy_solve(budget=budget, eps=eps, x0=x0, max_model_samples=max_model_samples)
         elif solver == "ipopt":  samples = self.ipopt_solve(budget=budget, eps=eps, x0=x0, max_model_samples=max_model_samples)
@@ -324,7 +324,7 @@ class SAP(object):
         ee = np.zeros((N,1)); ee[0] = np.sqrt(scales)/eps
         return cp.bmat([[PHI,ee],[ee.T,cp.reshape(t,(1,1))]])
 
-    def cvxpy_solve(self, budget=None, eps=None, delta=0.0, max_model_samples=None, cvxpy_params=None):
+    def cvxpy_solve(self, budget=None, eps=None, delta=0.0, max_model_samples=None, cvxpy_params=None, pareto_front_tau=None):
 
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
@@ -343,14 +343,22 @@ class SAP(object):
         scales = 1/abs(self.psi).sum(axis=0).mean()
 
         m = cp.Variable(L, nonneg=True)
-        if budget is not None:
-            t = cp.Variable(nonneg=True)
-            obj = cp.Minimize(t)
+        if pareto_front_tau is None:
+            if budget is not None:
+                t = cp.Variable(nonneg=True)
+                obj = cp.Minimize(t)
 
-            constraints = [w@m <= 1, m@e >= 1/budget, self.cvxpy_fun(m,t=t,eps=None) >> 0] + [m@ee <= rr/budget for ee,rr in zip(es,rhs)]
+                constraints = [w@m <= 1, m@e >= 1/budget, self.cvxpy_fun(m,t=t,eps=None) >> 0] + [m@ee <= rr/budget for ee,rr in zip(es,rhs)]
+            else:
+                obj = cp.Minimize((w/np.linalg.norm(w))@m)
+                constraints = [m@e >= 1, self.cvxpy_fun(m,t=None,eps=eps) >> 0] + [m@ee <= rr for ee,rr in zip(es,rhs)]
+        
         else:
-            obj = cp.Minimize((w/np.linalg.norm(w))@m)
-            constraints = [m@e >= 1, self.cvxpy_fun(m,t=None,eps=eps) >> 0] + [m@ee <= rr for ee,rr in zip(es,rhs)]
+            t = cp.Variable(nonneg=True)
+            obj = cp.Minimize(t + pareto_front_tau/np.linalg.norm(w)*(w@m))
+
+            constraints = [m@e >= 1, self.cvxpy_fun(m,t=t,eps=None) >> 0] + [m@ee <= rr for ee,rr in zip(es,rhs)]
+            
 
         prob = cp.Problem(obj, constraints)
 
@@ -365,7 +373,7 @@ class SAP(object):
         if m.value is None:
             return None
 
-        if eps is None: m.value *= budget
+        if eps is None and pareto_front_tau is None: m.value *= budget
 
         if self.verbose: print(m.value.round())
 
@@ -459,26 +467,36 @@ if __name__ == '__main__':
 
     problem = SAP(C, KK, groups, costs)
 
-    max_model_samples = np.inf*np.ones((N,)); max_model_samples[-4:] = 10.**(2*np.arange(4))
+    if True:
+        # If tau >= \bar{tau} we obtain a single HF MC sample (largest eps, minimum budget). For this example we don't since it is not a real multifidelity model set and costs are weird.
+        # For tau->0, budget->inf, eps->0. In general, as tau decreases the budget increases and eps decreases.
+        tau = 1
+        cvxpy_sol  = problem.solve(eps=eps, solver="cvxpy", continuous_relaxation=True, pareto_front_tau=tau)
+        fval = (costs@cvxpy_sol, problem.variance(cvxpy_sol))
+        print(fval)
 
-    scipy_sol,cvxpy_sol,ipopt_sol,cvxopt_sol = None,None,None,None
-    if False:
-        cvxopt_sol = problem.solve(eps=eps, max_model_samples=max_model_samples, solver="cvxopt")
-        cvxpy_sol  = problem.solve(eps=eps, max_model_samples=max_model_samples, solver="cvxpy")
-        ipopt_sol  = problem.solve(eps=eps, max_model_samples=max_model_samples, solver="ipopt")
-        scipy_sol  = problem.solve(eps=eps, max_model_samples=max_model_samples, solver="scipy")
-        print("MSE tolerance: ", eps**2)
     else:
-        cvxopt_sol = problem.solve(budget=budget, max_model_samples=max_model_samples, solver="cvxopt")
-        cvxpy_sol  = problem.solve(budget=budget, max_model_samples=max_model_samples, solver="cvxpy")
-        ipopt_sol  = problem.solve(budget=budget, max_model_samples=max_model_samples, solver="ipopt")
-        scipy_sol  = problem.solve(budget=budget, max_model_samples=max_model_samples, solver="scipy")
-        print("Budget: ", budget)
 
-    sols = [cvxopt_sol, cvxpy_sol, ipopt_sol, scipy_sol]
-    fvals = [(costs@sol, problem.variance(sol)) for sol in sols if sol is not None]
+        max_model_samples = np.inf*np.ones((N,)); max_model_samples[-4:] = 10.**(2*np.arange(4))
 
-    es,rhs = problem.get_max_sample_constraints(max_model_samples)
-    assert all([[ee@sol <= rr for ee,rr in zip(es,rhs)] for sol in sols])
+        scipy_sol,cvxpy_sol,ipopt_sol,cvxopt_sol = None,None,None,None
+        if False:
+            cvxopt_sol = problem.solve(eps=eps, max_model_samples=max_model_samples, solver="cvxopt")
+            cvxpy_sol  = problem.solve(eps=eps, max_model_samples=max_model_samples, solver="cvxpy")
+            ipopt_sol  = problem.solve(eps=eps, max_model_samples=max_model_samples, solver="ipopt")
+            scipy_sol  = problem.solve(eps=eps, max_model_samples=max_model_samples, solver="scipy")
+            print("MSE tolerance: ", eps**2)
+        else:
+            cvxopt_sol = problem.solve(budget=budget, max_model_samples=max_model_samples, solver="cvxopt")
+            cvxpy_sol  = problem.solve(budget=budget, max_model_samples=max_model_samples, solver="cvxpy")
+            ipopt_sol  = problem.solve(budget=budget, max_model_samples=max_model_samples, solver="ipopt")
+            scipy_sol  = problem.solve(budget=budget, max_model_samples=max_model_samples, solver="scipy")
+            print("Budget: ", budget)
 
-    print(fvals)
+        sols = [cvxopt_sol, cvxpy_sol, ipopt_sol, scipy_sol]
+        fvals = [(costs@sol, problem.variance(sol)) for sol in sols if sol is not None]
+
+        es,rhs = problem.get_max_sample_constraints(max_model_samples)
+        assert all([[ee@sol <= rr for ee,rr in zip(es,rhs)] for sol in sols])
+
+        print(fvals)

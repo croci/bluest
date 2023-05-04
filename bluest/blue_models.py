@@ -445,7 +445,7 @@ class BLUEProblem(object):
     def blue_fn(self, ls, N, verbose=True, compute_mlmc_differences=False):
         return blue_fn(ls, N, self, sampler=self.sampler, inners=self.get_models_inner_products(), comm = self.get_comm(), N1=self.params["sample_batch_size"], No=self.n_outputs, compute_mlmc_differences=compute_mlmc_differences, verbose=self.verbose and verbose, filename=self.params["samplefile"], outputs_to_save=self.params["outputs_to_save"])
 
-    def setup_solver(self, K=4, budget=None, eps=None, groups=None, multi_groups=None, solver=None, continuous_relaxation=False, max_model_samples=None, optimization_solver_params=None):
+    def setup_solver(self, K=4, budget=None, eps=None, groups=None, multi_groups=None, solver=None, continuous_relaxation=False, max_model_samples=None, optimization_solver_params=None, pareto_front_tau=None):
         if budget is None and eps is None: raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None: eps = None
         if eps is not None and isinstance(eps,(int,float,np.int64,np.float64, np.float32, np.int32)): eps = [eps for n in range(self.n_outputs)]
@@ -507,7 +507,7 @@ class BLUEProblem(object):
         if self.verbose: print("Computing optimal sample allocation...")
         if self.mpiRank == 0:
             self.MOSAP = MOSAP(C, K, Ks, groups, multi_groups, costs, multi_costs, verbose=self.verbose)
-            self.MOSAP.solve(eps=eps, budget=budget, solver=solver, continuous_relaxation=continuous_relaxation, max_model_samples=max_model_samples, solver_params=optimization_solver_params)
+            self.MOSAP.solve(eps=eps, budget=budget, solver=solver, continuous_relaxation=continuous_relaxation, max_model_samples=max_model_samples, solver_params=optimization_solver_params, pareto_front_tau=pareto_front_tau)
             #NOTE: this is just to avoid a deadlock
             if self.MOSAP.samples is None:
                 self.MOSAP_output = None
@@ -537,13 +537,13 @@ class BLUEProblem(object):
 
         return blue_data
 
-    def solve(self, K=4, budget=None, eps=None, groups=None, multi_groups=None, solver=None, verbose=True, continuous_relaxation=False, max_model_samples=None, optimization_solver_params=None):
+    def solve(self, K=4, budget=None, eps=None, groups=None, multi_groups=None, solver=None, verbose=True, continuous_relaxation=False, max_model_samples=None, optimization_solver_params=None, pareto_front_tau=None):
         if solver is None: solver = self.params["optimization_solver"]
         if self.MOSAP_output is None:
-            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, multi_groups=multi_groups, solver=solver, continuous_relaxation=continuous_relaxation, max_model_samples=max_model_samples, optimization_solver_params=optimization_solver_params)
+            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, multi_groups=multi_groups, solver=solver, continuous_relaxation=continuous_relaxation, max_model_samples=max_model_samples, optimization_solver_params=optimization_solver_params, pareto_front_tau=pareto_front_tau)
 
         elif budget is not None and budget != self.MOSAP_output['budget'] or eps is not None and eps != self.MOSAP_output['eps']:
-            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, multi_groups=multi_groups, solver=solver, continuous_relaxation=continuous_relaxation, max_model_samples=max_model_samples, optimization_solver_params=optimization_solver_params)
+            self.setup_solver(K=K, budget=budget, eps=eps, groups=groups, multi_groups=multi_groups, solver=solver, continuous_relaxation=continuous_relaxation, max_model_samples=max_model_samples, optimization_solver_params=optimization_solver_params, pareto_front_tau=pareto_front_tau)
         elif budget is None and eps is None and self.MOSAP_output['cost'] is None: # if cost is not None, then the optimal samples have been found
             raise ValueError("Need to prescribe either a budget or an error tolerance to run the BLUE estimator")
 

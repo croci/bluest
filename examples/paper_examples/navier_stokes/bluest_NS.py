@@ -114,10 +114,10 @@ if __name__ == "__main__":
 
     eps = 1e-3*np.sqrt([c[0,0] for c in problem.get_covariances()]); budget = None
 
-    solver_test = True
+    solver_test = False
+    pareto_front = True
     if solver_test:
         from time import time
-        #FIXME: this eps is not correct isn't it? It should be on the variance
         K = 3; eps = 1e-3*np.sqrt([c[0,0] for c in problem.get_covariances()]); budget = max(costs)*1e4
         OUT = [[],[]]
 
@@ -138,6 +138,24 @@ if __name__ == "__main__":
             print(OUT[i], "\n")
 
         sys.exit(0)
+
+    if pareto_front:
+        taus = 10.**np.arange(-15,5)[::-1]
+        out_costs = []
+        out_errors = []
+        for tau in taus:
+            K = 3; eps = None; budget = max(costs)*1e4
+            out_BLUE = problem.setup_solver(K=K, budget=budget, eps=None, continuous_relaxation = True, solver="cvxpy", pareto_front_tau = tau)
+
+            std_devs = np.sqrt([c[0,0] for c in problem.get_covariances()])
+            print("Total Cost: %e. Max normalised error: %e" % (out_BLUE['total_cost'], max(out_BLUE['errors']/std_devs)))
+            out_costs.append(out_BLUE['total_cost'])
+            out_errors.append(max(out_BLUE['errors']/std_devs))
+
+        np.savez("./pareto_front_results.npz", taus = taus, costs = out_costs, errors = out_errors)
+
+        sys.exit(0)
+
 
     out_BLUE = problem.setup_solver(K=7, budget=budget, eps=eps)
     out_MLMC = problem.setup_mlmc(budget=budget, eps=eps)
