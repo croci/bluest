@@ -251,7 +251,7 @@ class BLUEProblem(object):
         C[mask0] = np.inf
         C[maskinf] = 0    # if set to zero, then the graph won't have an edge there
 
-        G = nx.from_numpy_matrix(C)
+        G = nx.from_numpy_array(C)
 
         if costs is not None:
             for l in range(M):
@@ -283,7 +283,7 @@ class BLUEProblem(object):
 
         self.G = []
         for n in range(self.n_outputs):
-            GG = nx.from_numpy_matrix(data["C%d" % n])
+            GG = nx.from_numpy_array(data["C%d" % n])
             for l in range(self.M):
                 if costs is None: GG.nodes[l]['cost'] = data["costs"][l]
                 else:             GG.nodes[l]['cost'] = costs[l]
@@ -864,7 +864,7 @@ class BLUEProblem(object):
 
         return mfmc_data
 
-    def solve_mfmc(self, budget=None, eps=None, mfmc_data=None):
+    def solve_mfmc(self, budget=None, eps=None, mfmc_data=None, continuous_relaxation=False):
         if budget is None and eps is None:
             raise ValueError("Need to specify either budget or RMSE tolerance")
         elif budget is not None and eps is not None:
