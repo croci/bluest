@@ -31,7 +31,7 @@ See the [**Examples and Tutorials**](#examples-and-tutorials) section below, the
 
 ## Dependencies and installation
 
-**BLUEST** requires Python >= 3.7 with the following packages: `numpy`, `scipy`, `pybind11`, `networkx`, `mpi4py`, `cvxopt`, `cvxpy`.
+**BLUEST** requires Python >= 3.7 with the following packages: `numpy`, `scipy`, `pybind11`, `networkx` (>=3.0), `mpi4py`, `cvxopt`, `cvxpy`.
 
 **BLUEST** is developed and tested exclusively on Linux machines. It *may* also work on Windows or Mac.
 
@@ -84,7 +84,7 @@ If you are curious about how to combine PDE models from legacy FEniCS, please ch
 
 If you use this package in your publications please cite the package as follows:
 
-M. Croci, K. E. Willcox, S. J. Wright, *Multi-output multilevel best linear unbiased estimators via semidefinite programming*. Preprint (2023). URL https://export.arxiv.org/abs/2301.07831
+M. Croci, K. E. Willcox, S. J. Wright, *Multi-output multilevel best linear unbiased estimators via semidefinite programming*. Computer Methods in Applied Mechanics and Engineering 413, 116130 (2023). Article DOI https://doi.org/10.1016/j.cma.2023.116130, Preprint https://export.arxiv.org/abs/2301.07831
 
 ```tex
 @misc{croci2023multioutput,
