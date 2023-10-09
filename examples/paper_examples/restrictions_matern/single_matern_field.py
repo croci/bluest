@@ -73,7 +73,19 @@ class MaternField(object):
         else:
             sigma_correction = np.sqrt(2./np.pi)/params['lmbda']
 
-        params["scaling"] = params["sigma"]/sigma_correction
+        # scale std. dev and mean if lognormal scaling used
+        avg   = params["avg"]
+        sigma = params["sigma"]
+        if params["lognormal_scaling"] == True:
+            sigma_factor = np.sqrt(np.log(1. + (sigma/avg)**2.))
+            mu = np.log(avg**2./np.sqrt(sigma**2. + avg**2.0))
+        else:
+            sigma_factor = sigma
+            mu           = avg
+
+        params["scaling"] = sigma_factor/sigma_correction
+        params["mu"] = mu
+
         return params
 
     def solver_setup(self):
@@ -136,7 +148,7 @@ class MaternField(object):
                 out.vector()[:] = x.getArray()
                 b = as_backend_type(assemble(out*v*dx)).vec()
 
-        out.vector()[:] = parameters["scaling"]*x.getArray() + parameters["avg"]
+        out.vector()[:] = parameters["scaling"]*x.getArray() + parameters["mu"]
 
         # nested interpolation
         inner_out = Function(self.inner_V)
@@ -153,22 +165,30 @@ if __name__ == "__main__":
     parameters = {"lmbda"    : 0.2, # correlation length 
                   "avg"      : 1.0, # mean
                   "sigma"    : 0.2, # standard dev.
-                  "lognormal_scaling" : True,
+                  "lognormal_scaling" : False,
                   "nu"       : 2*k-dim/2} # smoothness parameter
 
     l = 7
     # NOTE: the way the algorithm works is that it samples the Matern field by solving an SPDE on an outer domain and then
     #       transferring the result onto the domain on which we actually need the sample. This code assumes
     #       that the inner domain mesh is nested within the outer domain mesh.
-    outer_mesh = RectangleMesh(MPI.comm_self, Point(-1,-1), Point(1,1), 2**(l+1), 2**(l+1)) # auxiliary mesh
-    inner_mesh = RectangleMesh(MPI.comm_self, Point(-0.5,-0.5), Point(0.5,0.5), 2**l, 2**l) # mesh on which we actually need the sample
+    if dim == 1:
+        outer_mesh = IntervalMesh(MPI.comm_self, 2**(l+1), -1, 1)
+        inner_mesh = IntervalMesh(MPI.comm_self, 2**l, -0.5, 0.5)
+    elif dim == 2:
+        outer_mesh = RectangleMesh(MPI.comm_self, Point(-1,-1), Point(1,1), 2**(l+1), 2**(l+1)) # auxiliary mesh
+        inner_mesh = RectangleMesh(MPI.comm_self, Point(-0.5,-0.5), Point(0.5,0.5), 2**l, 2**l) # mesh on which we actually need the sample
     assert outer_mesh.geometry().dim() == dim
 
     outer_V = FunctionSpace(outer_mesh, "CG", 1)
     inner_V = FunctionSpace(inner_mesh, "CG", 1)
 
+    WN = WhiteNoiseField(inner_V)
+    wn = WN.sample()
+
     matern = MaternField(outer_V, inner_V, parameters)
 
     m = matern.sample()
-    mm = project(exp(m), inner_V)
+    if parameters["lognormal_scaling"]:
+        m = project(exp(m), inner_V)
     print(assemble(m*dx), np.sqrt(assemble((m-parameters["avg"])**2*dx))) # should match avg and sigma for fine enough grids
