@@ -135,7 +135,7 @@ cvxpy_params = {
         "solver" : "CLARABEL",
         "solver_params" : {}, # A dictionary with CLARABEL solver parameters. See CVXPY and CLARABEL documentation
 }
-MLBLUE_data = problem.setup_solver(K=n_models, budget=budget, solver="cvxopt", optimization_solver_params=cvxpy_params)
+MLBLUE_data = problem.setup_solver(K=n_models, budget=budget, solver="cvxpy", optimization_solver_params=cvxpy_params)
 
 ################################ PART 2 - PARALLELIZATION #######################################
 
