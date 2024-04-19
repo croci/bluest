@@ -426,10 +426,10 @@ if __name__ == '__main__':
 
             out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
             for i in range(2):
-                for solver in ["cvxpy", "ipopt"]:
+                for solver in ["cvxpy"]:
                     tic = time()
-                    if i == 0: out = problem.setup_solver(K=K, budget=budget, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-7, 'abstol':1e-6, 'reltol':1e-3})
-                    else:      out = problem.setup_solver(K=K, eps=eps, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-7, 'abstol':1e-6, 'reltol':1e-3})
+                    if i == 0: out = problem.setup_solver(K=K, budget=budget, solver=solver, continuous_relaxation=True, optimization_solver_params={"solver":"CVXOPT", "solver_params": {'feastol':1.e-7, 'abstol':1e-6, 'reltol':1e-3}})
+                    else:      out = problem.setup_solver(K=K, eps=eps, solver=solver, continuous_relaxation=True, optimization_solver_params={"solver":"CVXOPT", "solver_params":{'feastol':1.e-7, 'abstol':1e-6, 'reltol':1e-3}})
                     toc = time() - tic
                     out = np.array([max(out['errors']), out['total_cost'], toc])
                     OUT[i].append(out)

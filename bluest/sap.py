@@ -20,13 +20,18 @@ mosek_params = {
     "MSK_IPAR_INTPNT_MAX_ITERATIONS": 100,
 }
 
-cvxpy_default_params = {
+cvxpy_cvxopt_default_params = {
         "abstol" : 1.e-7,
         "reltol" : 1.e-4,
         "max_iters" : 1000,
         "feastol" : 1.0e-6,
         "kttsolver" : 'chol',
         "refinement" : 1,
+}
+
+cvxpy_default_params = {
+        "solver" : "CVXOPT",
+        "solver_params" : cvxpy_cvxopt_default_params,
 }
 
 cvxopt_default_params = {
@@ -333,9 +338,16 @@ class SAP(object):
         w        = self.costs
         e        = self.e
 
-        cvxpy_solver_params = cvxpy_default_params.copy()
         if cvxpy_params is not None:
-            cvxpy_solver_params.update(cvxpy_params)
+            if cvxpy_params["solver"] == "CVXOPT":
+                cvxpy_solver_params = cvxpy_default_params.copy()
+                cvxpy_solver_params["solver_params"].update(cvxpy_params["solver_params"])
+            else:
+                cvxpy_solver_params = cvxpy_params.copy()
+                if cvxpy_solver_params.get("solver_params", None) is None:
+                    cvxpy_solver_params["solver_params"] = {}
+        else:
+            cvxpy_solver_params = cvxpy_default_params.copy()
 
         es,rhs = self.get_max_sample_constraints(max_model_samples)
 
@@ -358,7 +370,8 @@ class SAP(object):
         #breakpoint()
 
         #prob.solve(verbose=self.verbose, solver="MOSEK", mosek_params=mosek_params)
-        try: prob.solve(verbose=self.verbose, solver="CVXOPT", **cvxpy_solver_params)
+        try:
+            prob.solve(verbose=self.verbose, solver=cvxpy_solver_params["solver"], **cvxpy_solver_params["solver_params"])
         except (cp.SolverError,ZeroDivisionError):
             return None
 

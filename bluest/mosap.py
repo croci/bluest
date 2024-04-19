@@ -506,9 +506,16 @@ class MOSAP(object):
         e        = self.e
         mappings = self.mappings
 
-        cvxpy_solver_params = cvxpy_default_params.copy()
         if cvxpy_params is not None:
-            cvxpy_solver_params.update(cvxpy_params)
+            if cvxpy_params["solver"] == "CVXOPT":
+                cvxpy_solver_params = cvxpy_default_params.copy()
+                cvxpy_solver_params["solver_params"].update(cvxpy_params["solver_params"])
+            else:
+                cvxpy_solver_params = cvxpy_params.copy()
+                if cvxpy_solver_params.get("solver_params", None) is None:
+                    cvxpy_solver_params["solver_params"] = {}
+        else:
+            cvxpy_solver_params = cvxpy_default_params.copy()
 
         ES,rhs = self.get_max_sample_constraints(max_model_samples)
 
@@ -537,7 +544,8 @@ class MOSAP(object):
 
         #prob.solve(verbose=self.verbose, solver="SCS")#, acceleration_lookback=0, acceleration_interval=0)
         #prob.solve(verbose=self.verbose, solver="MOSEK", mosek_params=mosek_params)
-        try: prob.solve(verbose=self.verbose, solver="CVXOPT", **cvxpy_solver_params)
+        try:
+            prob.solve(verbose=self.verbose, solver=cvxpy_solver_params["solver"], **cvxpy_solver_params["solver_params"])
         except (cp.SolverError,ZeroDivisionError):
             return None
 

@@ -125,8 +125,8 @@ if __name__ == "__main__":
         for i in range(2):
             for solver in ["cvxpy", "ipopt"]:
                 tic = time()
-                if i == 0: out = problem.setup_solver(K=K, budget=budget, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-3, 'abstol':1e-6, 'reltol':1e-2})
-                else:      out = problem.setup_solver(K=K, eps=eps, solver=solver, continuous_relaxation=True, optimization_solver_params={'feastol':1.e-7, 'abstol':1e-6})
+                if i == 0: out = problem.setup_solver(K=K, budget=budget, solver=solver, continuous_relaxation=True, optimization_solver_params={"solver" : "CVXOPT", "solver_params":{'feastol':1.e-3, 'abstol':1e-6, 'reltol':1e-2}})
+                else:      out = problem.setup_solver(K=K, eps=eps, solver=solver, continuous_relaxation=True, optimization_solver_params={"solver":"CVXOPT", "solver_params":{'feastol':1.e-7, 'abstol':1e-6}})
                 toc = time() - tic
                 out = np.array([max(out['errors']), out['total_cost'], toc])
                 OUT[i].append(out)

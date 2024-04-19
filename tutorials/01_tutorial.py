@@ -128,6 +128,15 @@ cvxopt_params = {
 MLBLUE_data = problem.setup_solver(K=n_models, budget=budget, solver="cvxopt", optimization_solver_params=cvxopt_params)
 # Changing feastol is typically enough, sometimes you can increase the other tolerances or reduce maxiters
 
+# IMPORTANT: We now recommend using CVXPY and the CLARABEL solver. CVXOPT and SDPA also work well.
+# See https://www.cvxpy.org/tutorial/advanced/index.html#solve-method-options
+# To change CVXPY solver, setup the solver parameters as follows:
+cvxpy_params = {
+        "solver" : "CLARABEL",
+        "solver_params" : {}, # A dictionary with CLARABEL solver parameters. See CVXPY and CLARABEL documentation
+}
+MLBLUE_data = problem.setup_solver(K=n_models, budget=budget, solver="cvxopt", optimization_solver_params=cvxpy_params)
+
 ################################ PART 2 - PARALLELIZATION #######################################
 
 # Everything runs in parallel with MPI. Simply call the script with e.g.:

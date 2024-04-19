@@ -170,14 +170,14 @@ if solver_test:
 
     out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
     out_cvxopt = problem.setup_solver(K=K, budget=budget, solver="cvxopt", optimization_solver_params={'feastol':1.e-5})
-    out_cvxpy  = problem.setup_solver(K=K, budget=budget, solver="cvxpy", optimization_solver_params={'feastol':1.e-5})
+    out_cvxpy  = problem.setup_solver(K=K, budget=budget, solver="cvxpy", optimization_solver_params={"solver":"CVXOPT", "solver_params":{'feastol':1.e-5}})
     out_ipopt  = problem.setup_solver(K=K, budget=budget, solver="ipopt")
     out_scipy  = problem.setup_solver(K=K, budget=budget, solver="scipy")
     out1 = (out_cvxpy, out_cvxopt, out_ipopt, out_scipy); [out.pop('samples') for out in out1 if out is not None]
 
     out_cvxpy,out_cvxopt,out_ipopt,out_scipy = None, None, None, None
     out_cvxopt = problem.setup_solver(K=K, eps=eps, solver="cvxopt", optimization_solver_params={'feastol':1.e-7})
-    out_cvxpy  = problem.setup_solver(K=K, eps=eps, solver="cvxpy", optimization_solver_params={'feastol':1.e-7})
+    out_cvxpy  = problem.setup_solver(K=K, eps=eps, solver="cvxpy", optimization_solver_params={"solver":"CVXOPT", "solver_params":{'feastol':1.e-7}})
     out_ipopt  = problem.setup_solver(K=K, eps=eps, solver="ipopt")
     out_scipy  = problem.setup_solver(K=K, eps=eps, solver="scipy")
     out2 = (out_cvxpy, out_cvxopt, out_ipopt, out_scipy); [out.pop('samples') for out in out2 if out is not None]
