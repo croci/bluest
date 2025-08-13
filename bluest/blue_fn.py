@@ -104,7 +104,7 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
         if outputs_to_save is None: outputs_to_save = list(range(No))
 
     NN = [N//mpiSize]*mpiSize
-    for i in range(N%nprocs):
+    for i in range(N%mpiSize):
         NN[i] += 1
 
     assert sum(NN) == N
