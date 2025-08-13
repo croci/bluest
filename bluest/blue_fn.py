@@ -103,10 +103,11 @@ def blue_fn(ls, N, problem, sampler=None, inners = None, comm = None, N1 = 1, No
         outdict.update({"inputs_%d" % i : [] for i in range(L)})
         if outputs_to_save is None: outputs_to_save = list(range(No))
 
-    nprocs  = min(mpiSize,max(N,1))
-    NN      = [N//nprocs]*nprocs 
-    NN[0]  += N%nprocs
-    NN     += [0 for i in range(mpiSize - nprocs)]
+    NN = [N//mpiSize]*mpiSize
+    for i in range(N%nprocs):
+        NN[i] += 1
+
+    assert sum(NN) == N
 
     nobatch = len(signature(sampler).parameters) == 1
     if nobatch: N1 = 1

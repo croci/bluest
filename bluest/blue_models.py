@@ -914,7 +914,7 @@ class BLUEProblem(object):
 
         if budget is not None:
             N_MC = int(np.floor(budget/cost))
-            errs  = np.sqrt(Vs/N_MC) 
+            errs  = np.sqrt(np.maximum(Vs,0.0)/N_MC) 
             tot_cost = N_MC*cost
         else:
             N_MC = max(int(np.ceil(Vs[n]/eps[n]**2)) for n in range(self.n_outputs))
