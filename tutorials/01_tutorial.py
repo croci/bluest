@@ -1,4 +1,4 @@
-from bluest import BLUEProblem
+from bluest import BLUEProblem,BLUESTError
 import numpy as np
 from scipy.special import gamma
 
@@ -43,6 +43,17 @@ costs = np.array([2**(n_models-i) for i in range(n_models)])
 # 32 (or even 20) samples are enough for application runs. For debugging and Maths papers, set it to 1000.
 # These samples won't be re-used. Sample re-use introduces bias and is not implemented here yet.
 problem = MyProblem(n_models, costs=costs, covariance_estimation_samples=32, verbose=False)
+
+# Can also set different costs for each group. First, get all possible model groups as follows:
+all_model_groups = problem.get_all_model_combinations() # These are just all sorted combinations of numbers from 0 to n_models-1, stored as tuples
+# Then, prescribe the cost for each group with a dictionary
+group_costs = {}
+for group in all_model_groups:
+    group_costs[group] = costs[np.array(group)].sum() # here just summing the cost of each model.
+
+# Finally, set the model group costs as follows:
+problem.set_group_costs(group_costs)
+# These will now be used by MLBLUE, but not by std MC, MLMC, or MFMC!!!
 
 ################################ PART 1 - BASIC USAGE ########################################
 
@@ -131,11 +142,21 @@ MLBLUE_data = problem.setup_solver(K=n_models, budget=budget, solver="cvxopt", o
 # IMPORTANT: We now recommend using CVXPY and the CLARABEL solver. CVXOPT and SDPA also work well.
 # See https://www.cvxpy.org/tutorial/advanced/index.html#solve-method-options
 # To change CVXPY solver, setup the solver parameters as follows:
-cvxpy_params = {
-        "solver" : "CLARABEL",
-        "solver_params" : {}, # A dictionary with CLARABEL solver parameters. See CVXPY and CLARABEL documentation
+clarabel_default_params = {
+        "tol_gap_abs" : 1.e-7,
+        "tol_gap_rel" : 1.e-4,
+        "max_iter" : 1000,
+        "tol_feas" : 1.0e-6,
+        "direct_kkt_solver" : True,
+        "iterative_refinement_enable" : True,
 }
-MLBLUE_data = problem.setup_solver(K=n_models, budget=budget, solver="cvxpy", optimization_solver_params=cvxpy_params)
+clarabel_params = {
+        "solver" : "CLARABEL",
+        "solver_params" : clarabel_default_params, # A dictionary with CLARABEL solver parameters. See CVXPY and CLARABEL documentation
+}
+
+try: MLBLUE_data = problem.setup_solver(K=n_models, budget=budget, solver="cvxpy", optimization_solver_params=clarabel_params)
+except BLUESTError: pass
 
 ################################ PART 2 - PARALLELIZATION #######################################
 
@@ -215,6 +236,10 @@ C = np.nan*C # setting all entries of C to NaN, they will be re-estimated
 # Model set might be pruned after this in case some models become useless
 C[0,1] = np.inf; C[1,0] = np.inf
 problem = MyProblem(n_models, C = C, costs=costs, covariance_estimation_samples=32)
+
+# NOTE: If the user wants to prescribe group costs, then costs have to be
+# prescribed for all model groups, even those that are not allowed. The not
+# allowed groups won't be sampled anyways and those costs ignored.
 
 # If a covariance matrix is given, this will be projected to be spd.
 # You can skip this projection at your own risk by setting skip_projection=True
@@ -307,7 +332,8 @@ problem = MyMultiOutputProblem(n_models, n_outputs=n_outputs, costs=costs, covar
 
 # same as before with prescribed budget
 budget = 1000*max(costs) # budget corresponding to 1000 std MC samples
-MLBLUE_data = problem.setup_solver(K=n_models, budget=budget)
+try: MLBLUE_data = problem.setup_solver(K=n_models, budget=budget)
+except BLUESTError: pass
 
 # can prescribe a single statistical error tolerance for all outputs:
 eps = 0.01*np.sqrt(problem.get_covariance(0)[0,0])
@@ -319,14 +345,16 @@ MLBLUE_data = problem.setup_solver(K=n_models, eps=eps)
 
 # Can prescribe a single group for all
 groups = [[0], [1], [0,3], [4,5], [0,1,2,3,4]]
-MLBLUE_data = problem.setup_solver(groups=groups, eps=eps)
+try: MLBLUE_data = problem.setup_solver(groups=groups, eps=eps)
+except BLUESTError: pass
 
 # Or different groups for each
 groups_0 = [[0], [1], [0,3], [4,5], [0,1,2,3,4]]
 groups_1 = [[0], [1], [1,3], [3,5], [0,1,3,4]]
 multi_groups = [groups_0, groups_1]
 #NOTE: untested, let me know if it breaks
-MLBLUE_data = problem.setup_solver(multi_groups=multi_groups, eps=eps)
+try: MLBLUE_data = problem.setup_solver(multi_groups=multi_groups, eps=eps)
+except BLUESTError: pass
 
 # now need to prescribe a model covariance (and mlmc_variances) for each QoI:
 # (can use nan and inf as before)

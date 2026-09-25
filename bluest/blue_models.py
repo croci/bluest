@@ -40,7 +40,7 @@ def next_divisible_number(x, n):
 
 # Are any checks on the correlation matrix necessary?
 class BLUEProblem(object):
-    def __init__(self, M, C=None, costs=None, mlmc_variances=None, datafile=None, n_outputs=1, **params):
+    def __init__(self, M, C=None, costs=None, group_costs = None, mlmc_variances=None, datafile=None, n_outputs=1, **params):
         '''
             INPUT:
 
@@ -91,8 +91,14 @@ class BLUEProblem(object):
 
             self.dV = dV
 
-            if costs is None: self.estimate_costs(self.get_comm().Get_size())
+            if costs is None and group_costs is None:
+                self.estimate_costs(self.get_comm().Get_size())
+            elif group_costs is not None:
+                if self.verbose: print("Warning! Model costs not provided. Using model groups to define individual model costs.")
+                all_model_groups = self.get_all_model_combinations()
+                costs = np.array([group_costs[group] for group in all_model_groups if len(group) == 1])
             self.check_costs(warning=True) # Sending a warning just in case
+            self.set_group_costs(group_costs)
             
             self.estimate_missing_covariances(next_divisible_number(self.params["covariance_estimation_samples"], self.mpiSize))
             if not self.params["skip_projection"]:
@@ -134,9 +140,29 @@ class BLUEProblem(object):
     def get_costs(self):
         return np.array([self.G[0].nodes[l]['cost'] for l in range(self.M)])
 
-    def get_group_costs(self, groups):
+    def get_all_model_combinations(self):
+        all_model_groups = [group for k in range(1, self.M+1) for group in combinations(range(self.M), k)]
+        #all_model_groups = [np.array([group for group in combinations(range(M), k)]) for k in range(1, M+1)]
+        return all_model_groups
+
+    def set_group_costs(self, group_cost_dict=None):
         model_costs = self.get_costs()
-        costs = np.array([sum(model_costs[group]) for groupsk in groups for group in groupsk])
+        all_model_groups = self.get_all_model_combinations()
+        group_costs = {}
+        for group in all_model_groups:
+            if group_cost_dict is not None:
+                try: group_costs[group] = group_cost_dict[group]
+                except KeyError as exc:
+                    raise KeyError("Invalid key gor group cost dictionary. Accepted keys can be queried with .get_all_model_combinations().") from exc
+            else:
+                group_costs[group] = model_costs[np.array(group)].sum()
+
+        self.group_costs = group_costs
+
+    def get_group_costs(self, groups):
+        #model_costs = self.get_costs()
+        #costs = np.array([sum(model_costs[group]) for groupsk in groups for group in groupsk])
+        costs = np.array([self.group_costs[tuple(group)] for groupsk in groups for group in groupsk])
         return costs
 
     def check_costs(self, warning=True):
@@ -266,7 +292,9 @@ class BLUEProblem(object):
         if self.mpiRank == 0:
             C_dict = {"C%d" % n : nx.adjacency_matrix(self.G[n]).toarray() for n in range(self.n_outputs)}
             costs = self.get_costs()
-            np.savez(filename, M = self.M, n_outputs = self.n_outputs, costs=costs, **C_dict, SG=self.SG, dV=self.dV)
+            all_model_groups = self.get_all_model_combinations()
+            group_costs = self.get_group_costs([all_model_groups])
+            np.savez(filename, M = self.M, n_outputs = self.n_outputs, costs=costs, group_costs=group_costs, **C_dict, SG=self.SG, dV=self.dV)
 
         self.comm.barrier()
 
@@ -297,6 +325,29 @@ class BLUEProblem(object):
             self.dV = [np.nan*np.ones((self.M,self.M)) for n in range(self.n_outputs)]
         else:
             self.dV = [dV[n] for n in range(self.n_outputs)]
+
+        group_costs = data.get("group_costs", None)
+        if group_costs is None:
+            self.set_group_costs()
+        else:
+            error = True
+            all_model_groups = self.get_all_model_combinations()
+            if len(all_model_groups) == len(group_costs):
+                group_cost_dict = {}
+                for i,group in enumerate(all_model_groups):
+                    group_cost_dict[group] = group_costs[i]
+                try:
+                    self.set_group_costs(group_cost_dict)
+                    error = False
+                except KeyError: pass
+                    
+            if error:
+                print("Warning! Loaded model group costs are incompatible with the model. Setting group costs to their default value. Consider specifying group costs again or setting them to None.")
+                print("Model groups:")
+                print(self.get_all_model_combinations())
+                print("\nLoaded group costs:")
+                print(group_costs)
+                self.set_group_costs()
 
     def check_graphs(self, remove_uncorrelated=False):
         for n in range(self.n_outputs):
