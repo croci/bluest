@@ -1,6 +1,7 @@
 import numpy as np
 import networkx as nx
 from itertools import combinations
+from copy import deepcopy
 from mpi4py.MPI import COMM_WORLD
 from .blue_fn import blue_fn
 from .mosap import MOSAP,BLUESTError
@@ -95,7 +96,7 @@ class BLUEProblem(object):
                 self.estimate_costs(self.get_comm().Get_size())
             elif group_costs is not None:
                 if self.verbose: print("Warning! Model costs not provided. Using model groups to define individual model costs.")
-                all_model_groups = self.get_all_model_combinations()
+                all_model_groups = self.get_all_model_combinations()[0]
                 costs = np.array([group_costs[group] for group in all_model_groups if len(group) == 1])
             self.check_costs(warning=True) # Sending a warning just in case
             self.set_group_costs(group_costs)
@@ -143,11 +144,11 @@ class BLUEProblem(object):
     def get_all_model_combinations(self):
         all_model_groups = [group for k in range(1, self.M+1) for group in combinations(range(self.M), k)]
         #all_model_groups = [np.array([group for group in combinations(range(M), k)]) for k in range(1, M+1)]
-        return all_model_groups
+        return [all_model_groups]
 
     def set_group_costs(self, group_cost_dict=None):
         model_costs = self.get_costs()
-        all_model_groups = self.get_all_model_combinations()
+        all_model_groups = self.get_all_model_combinations()[0]
         group_costs = {}
         for group in all_model_groups:
             if group_cost_dict is not None:
@@ -158,6 +159,9 @@ class BLUEProblem(object):
                 group_costs[group] = model_costs[np.array(group)].sum()
 
         self.group_costs = group_costs
+
+    def get_all_group_costs(self):
+        return deepcopy(self.group_costs)
 
     def get_group_costs(self, groups):
         #model_costs = self.get_costs()
@@ -293,7 +297,7 @@ class BLUEProblem(object):
             C_dict = {"C%d" % n : nx.adjacency_matrix(self.G[n]).toarray() for n in range(self.n_outputs)}
             costs = self.get_costs()
             all_model_groups = self.get_all_model_combinations()
-            group_costs = self.get_group_costs([all_model_groups])
+            group_costs = self.get_group_costs(all_model_groups)
             np.savez(filename, M = self.M, n_outputs = self.n_outputs, costs=costs, group_costs=group_costs, **C_dict, SG=self.SG, dV=self.dV)
 
         self.comm.barrier()
@@ -331,7 +335,7 @@ class BLUEProblem(object):
             self.set_group_costs()
         else:
             error = True
-            all_model_groups = self.get_all_model_combinations()
+            all_model_groups = self.get_all_model_combinations()[0]
             if len(all_model_groups) == len(group_costs):
                 group_cost_dict = {}
                 for i,group in enumerate(all_model_groups):

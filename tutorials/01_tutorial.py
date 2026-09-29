@@ -48,7 +48,7 @@ problem = MyProblem(n_models, costs=costs, covariance_estimation_samples=32, ver
 all_model_groups = problem.get_all_model_combinations() # These are just all sorted combinations of numbers from 0 to n_models-1, stored as tuples
 # Then, prescribe the cost for each group with a dictionary
 group_costs = {}
-for group in all_model_groups:
+for group in all_model_groups[0]:
     group_costs[group] = costs[np.array(group)].sum() # here just summing the cost of each model.
 
 # Finally, set the model group costs as follows:
